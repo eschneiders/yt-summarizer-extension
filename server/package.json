@@ -1,0 +1,15 @@
+{
+  "name": "yts-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Shared stats, votes and weekly quota for the YouTube Feed Summariser extension.",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "test": "node test/api.test.mjs"
+  }
+}

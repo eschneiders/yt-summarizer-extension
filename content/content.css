@@ -1,0 +1,499 @@
+/* All injected classes are yts- prefixed so nothing collides with YouTube's
+   own styles. */
+
+/* ---------- thumbnail button ---------- */
+
+.yts-summarize-btn {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  z-index: 5;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 12px 6px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  font-family: 'Roboto', Arial, sans-serif;
+  color: #fff;
+  background: rgba(15, 15, 15, 0.75);
+  border: none;
+  border-radius: 999px;
+  cursor: pointer;
+  line-height: 1;
+  transition: background-color 0.15s ease;
+}
+
+.yts-summarize-btn:hover {
+  background: rgba(15, 15, 15, 0.92);
+}
+
+/* Watch page: the button sits in normal flow under the player, so undo the
+   thumbnail overlay positioning. */
+.yts-watch-bar {
+  display: flex;
+  align-items: center;
+  margin: 12px 0 0;
+}
+
+.yts-summarize-btn.yts-inline {
+  position: static;
+  padding: 9px 16px 9px 13px;
+  font-size: 13px;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.yts-summarize-btn.yts-inline:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+html:not([dark]) .yts-summarize-btn.yts-inline {
+  background: rgba(0, 0, 0, 0.05);
+  color: #0f0f0f;
+}
+
+html:not([dark]) .yts-summarize-btn.yts-inline:hover {
+  background: rgba(0, 0, 0, 0.1);
+}
+
+.yts-summarize-btn:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.yts-summarize-btn.yts-loading {
+  opacity: 0.85;
+}
+
+.yts-summarize-btn.yts-error {
+  background: rgba(180, 40, 40, 0.85);
+}
+
+/* Already summarised: opening it again is free, so it reads as done rather
+   than as another thing to spend on. */
+.yts-summarize-btn.yts-summarised {
+  background: rgba(22, 92, 60, 0.82);
+}
+
+.yts-summarize-btn.yts-summarised:hover {
+  background: rgba(22, 92, 60, 0.95);
+}
+
+.yts-summarize-btn.yts-inline.yts-summarised {
+  background: rgba(60, 200, 130, 0.18);
+  color: #3ecf8e;
+}
+
+.yts-summarize-btn.yts-inline.yts-summarised:hover {
+  background: rgba(60, 200, 130, 0.28);
+}
+
+html:not([dark]) .yts-summarize-btn.yts-inline.yts-summarised {
+  background: rgba(22, 122, 78, 0.12);
+  color: #12784c;
+}
+
+/* ---------- summary panel ---------- */
+
+/* In-flow accordion row, not an overlay: it spans the full width of the feed
+   grid (which already excludes the sidebar), scrolls with the page, and pushes
+   subsequent rows down. grid-column and flex-basis are both set because
+   YouTube's #contents has shipped as each at different times. */
+.yts-panel {
+  grid-column: 1 / -1;
+  flex-basis: 100%;
+  width: 100%;
+  box-sizing: border-box;
+  max-height: 0;
+  overflow: hidden;
+  opacity: 0;
+  margin: 0;
+  transition: max-height 0.3s ease, opacity 0.2s ease, margin 0.3s ease;
+  color: #f1f1f1;
+  font-family: 'Roboto', Arial, sans-serif;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.yts-panel.yts-open {
+  /* The transition needs a concrete value, so this cannot be `none`. Generous
+     because the panel uses overflow:hidden for the collapse animation, so
+     anything past this height is silently clipped with no scrollbar. */
+  max-height: 24000px;
+  opacity: 1;
+  margin: 4px 0 24px;
+}
+
+.yts-panel-inner {
+  box-sizing: border-box;
+  padding: 20px 24px;
+  border-radius: 14px;
+  background: #212121;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+/* YouTube ships a light theme too - follow whichever is active. */
+html:not([dark]) .yts-panel {
+  color: #0f0f0f;
+}
+
+html:not([dark]) .yts-panel-inner {
+  background: #f9f9f9;
+  border-color: rgba(0, 0, 0, 0.12);
+}
+
+.yts-panel-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.yts-collapse {
+  margin-left: auto;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  opacity: 0.6;
+  cursor: pointer;
+}
+
+.yts-collapse:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+html:not([dark]) .yts-collapse:hover {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+html:not([dark]) .yts-panel-header {
+  border-bottom-color: rgba(0, 0, 0, 0.1);
+}
+
+.yts-panel-thumb {
+  position: relative;
+  flex: 0 0 168px;
+  height: 94px;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #0f0f0f;
+}
+
+.yts-panel-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.yts-panel-duration {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.8);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.yts-panel-headinfo {
+  min-width: 0;
+}
+
+.yts-panel-title {
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.3;
+  margin-bottom: 4px;
+}
+
+.yts-panel-channel {
+  opacity: 0.75;
+  font-size: 13px;
+}
+
+.yts-panel-meta {
+  margin-top: 2px;
+  opacity: 0.55;
+  font-size: 12px;
+}
+
+.yts-panel-body {
+  padding: 4px 0 8px;
+}
+
+.yts-section-heading {
+  margin: 18px 0 8px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.yts-panel-body > .yts-section-heading:first-child {
+  margin-top: 14px;
+}
+
+.yts-overview {
+  margin: 0;
+  opacity: 0.9;
+}
+
+.yts-bullets {
+  margin: 0;
+  padding-left: 22px;
+}
+
+.yts-bullet {
+  margin-bottom: 9px;
+  opacity: 0.88;
+}
+
+.yts-bullet-label {
+  font-weight: 600;
+  opacity: 1;
+}
+
+/* Timestamps sit inline at the end of the bullet as small monospace chips,
+   deliberately not in a left-hand column. */
+.yts-chip {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: rgba(62, 116, 224, 0.22);
+  color: #7ba7ff;
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 11.5px;
+  text-decoration: none;
+  vertical-align: 1px;
+  white-space: nowrap;
+}
+
+.yts-chip:hover {
+  background: rgba(62, 116, 224, 0.38);
+}
+
+html:not([dark]) .yts-chip {
+  background: rgba(38, 92, 204, 0.14);
+  color: #1a4fbf;
+}
+
+.yts-panel-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+html:not([dark]) .yts-panel-footer {
+  border-top-color: rgba(0, 0, 0, 0.1);
+}
+
+.yts-footer-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.yts-action {
+  padding: 7px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.yts-action:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+html:not([dark]) .yts-action {
+  border-color: rgba(0, 0, 0, 0.2);
+}
+
+html:not([dark]) .yts-action:hover {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.yts-footer-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.yts-feedback {
+  display: flex;
+  gap: 2px;
+}
+
+.yts-vote {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  opacity: 0.6;
+  cursor: pointer;
+  transition: opacity 0.15s ease, background-color 0.15s ease;
+}
+
+.yts-vote:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+html:not([dark]) .yts-vote:hover {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.yts-vote {
+  gap: 5px;
+  width: auto;
+  min-width: 32px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-family: inherit;
+  font-size: 12px;
+}
+
+.yts-vote-count {
+  font-variant-numeric: tabular-nums;
+}
+
+.yts-vote.yts-voted {
+  opacity: 1;
+  color: #3ea6ff;
+}
+
+.yts-retired {
+  font-size: 12px;
+  opacity: 0.75;
+  max-width: 280px;
+  line-height: 1.35;
+}
+
+html:not([dark]) .yts-vote.yts-voted {
+  color: #065fd4;
+}
+
+/* ---------- loading / error states ---------- */
+
+.yts-panel-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 26px 10px;
+  text-align: center;
+}
+
+.yts-panel-hint {
+  opacity: 0.55;
+  font-size: 12px;
+}
+
+.yts-spinner {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.25);
+  border-top-color: #7ba7ff;
+  animation: yts-spin 0.8s linear infinite;
+}
+
+@keyframes yts-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Popup variant, used where a column is too narrow for an inline accordion.
+   position:absolute in page coordinates (not fixed) so it scrolls with the
+   document rather than hanging over whatever is underneath. */
+.yts-panel.yts-popup {
+  position: absolute;
+  z-index: 2400;
+  max-height: 75vh;
+  overflow-y: auto;
+  margin: 0;
+  opacity: 0;
+  transform: translateY(-6px);
+  transition: opacity 0.18s ease, transform 0.18s ease;
+  border-radius: 14px;
+  box-shadow: 0 14px 44px rgba(0, 0, 0, 0.55);
+}
+
+.yts-panel.yts-popup.yts-open {
+  max-height: 75vh;
+  margin: 0;
+  opacity: 1;
+  transform: none;
+}
+
+.yts-streaming {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 2px 2px;
+  opacity: 0.6;
+  font-size: 12.5px;
+}
+
+.yts-streaming-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #7ba7ff;
+  animation: yts-pulse 1s ease-in-out infinite;
+}
+
+@keyframes yts-pulse {
+  50% {
+    opacity: 0.25;
+  }
+}
+
+.yts-panel-error {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 6px 2px;
+}
+
+.yts-error-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.yts-error-title {
+  font-weight: 600;
+}
+
+.yts-error-msg {
+  opacity: 0.75;
+  font-size: 13px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}

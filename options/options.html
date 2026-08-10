@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>YouTube Feed Summariser — Settings</title>
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <main>
+      <h1>YouTube Feed Summariser</h1>
+      <p class="sub">Local dev build. Settings are stored with
+        <code>chrome.storage.local</code>.</p>
+
+      <div class="warn">
+        <strong>Your API key is stored unencrypted</strong> in this browser
+        profile, and any script running in the extension can read it. Fine for a
+        dev build on your own machine — do not ship this.
+      </div>
+
+      <label for="key">Gemini API key</label>
+      <input id="key" type="password" autocomplete="off" spellcheck="false"
+             placeholder="AIza…" />
+      <div class="row">
+        <label class="inline"><input id="reveal" type="checkbox" /> Show key</label>
+        <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Get a key</a>
+      </div>
+
+      <label>Model</label>
+      <p class="fixed-model"><code>gemini-3.5-flash-lite</code> — fixed, not configurable.</p>
+      <p class="hint">Cost is logged to the YouTube page console after every
+        summary, along with a running session total. Video input dominates the
+        bill, so cost scales with video length rather than summary length.
+        Videos over 60 minutes ask for confirmation before running.</p>
+
+      <label for="service">Summariser service URL</label>
+      <input id="service" type="url" autocomplete="off" spellcheck="false"
+             placeholder="http://localhost:8787" />
+      <p class="hint">Optional. Provides the shared view counter, crowd-sourced
+        thumbs-down re-runs, and the weekly minute allowance. Leave it empty and
+        the extension runs entirely locally — summaries and votes stay in this
+        browser and no counter is shown. See <code>server/README.md</code>.</p>
+      <p class="hint" id="quota">—</p>
+
+      <div class="actions">
+        <button id="save" type="button">Save</button>
+        <button id="clear" type="button" class="ghost">Clear key</button>
+        <span id="status" aria-live="polite"></span>
+      </div>
+    </main>
+    <script src="options.js"></script>
+  </body>
+</html>

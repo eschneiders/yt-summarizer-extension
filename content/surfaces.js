@@ -1,0 +1,127 @@
+// Per-surface config: adding a new surface is one new entry here, nothing
+// else in the codebase should need to know which surface it's running on.
+window.__ytSummarizer = window.__ytSummarizer || {};
+
+(function (ns) {
+  function extractVideoId(card) {
+    const anchors = card.querySelectorAll('a[href*="/watch?"]');
+    for (const a of anchors) {
+      try {
+        const url = new URL(a.getAttribute('href'), location.origin);
+        const id = url.searchParams.get('v');
+        if (id) return id;
+      } catch (e) {
+        // malformed href, try next anchor
+      }
+    }
+    return null;
+  }
+
+  // Tried in order; first match becomes the overlay mount. YouTube has been
+  // migrating cards from the Polymer `ytd-thumbnail` renderer to the newer
+  // lockup/view-model markup, and both ship depending on rollout, so we
+  // cannot depend on any single one of these.
+  const THUMBNAIL_SELECTORS = [
+    'ytd-thumbnail',
+    'yt-thumbnail-view-model',
+    '.ytThumbnailViewModelHost',
+    'a#thumbnail',
+    'a.yt-lockup-view-model__content-image',
+  ];
+
+  ns.surfaces = {
+    home: {
+      name: 'home',
+      kind: 'grid',
+      matches: (pathname) => pathname === '/',
+      gridSelector: 'ytd-rich-grid-renderer #contents.ytd-rich-grid-renderer',
+      cardSelector: 'ytd-rich-item-renderer',
+      thumbnailSelectors: THUMBNAIL_SELECTORS,
+      getVideoId: extractVideoId,
+    },
+    subscriptions: {
+      name: 'subscriptions',
+      kind: 'grid',
+      matches: (pathname) => pathname === '/feed/subscriptions',
+      // Subscriptions has shipped as both a rich-grid layout and a plain
+      // grid layout at various points; match both until confirmed live.
+      gridSelector:
+        'ytd-rich-grid-renderer #contents.ytd-rich-grid-renderer, ytd-grid-renderer #contents.ytd-grid-renderer',
+      cardSelector: 'ytd-rich-item-renderer, ytd-grid-video-renderer',
+      thumbnailSelectors: THUMBNAIL_SELECTORS,
+      getVideoId: extractVideoId,
+    },
+    // The watch page has no card grid: one video, and the summary belongs
+    // directly under the player, above the description and comments. Tried in
+    // order; whichever exists becomes the host for the button bar + panel.
+    watch: {
+      name: 'watch',
+      kind: 'single',
+      matches: (pathname) => pathname === '/watch',
+      hostSelectors: [
+        'ytd-watch-metadata',
+        '#above-the-fold',
+        '#below.ytd-watch-flexy',
+        '#below',
+      ],
+      getVideoId: () => {
+        try {
+          return new URL(location.href).searchParams.get('v');
+        } catch (e) {
+          return null;
+        }
+      },
+      // The player itself is the most reliable duration source on this page.
+      getDurationSeconds: () => {
+        const video = document.querySelector('video');
+        if (video && isFinite(video.duration) && video.duration > 0) {
+          return Math.round(video.duration);
+        }
+        const label = document.querySelector('.ytp-time-duration');
+        return label ? ns.timestampToSeconds(label.textContent) : 0;
+      },
+      readMeta: () => {
+        const titleEl = document.querySelector(
+          'h1.ytd-watch-metadata yt-formatted-string, h1.ytd-watch-metadata, #title h1'
+        );
+        const channelEl = document.querySelector('#owner #channel-name a, ytd-channel-name a');
+        return {
+          title: titleEl ? titleEl.textContent.trim() : document.title.replace(/ - YouTube$/, ''),
+          channel: channelEl ? channelEl.textContent.trim() : '',
+          // No thumbnail: the actual video is directly above the panel.
+          thumb: null,
+          duration: '',
+        };
+      },
+    },
+    // The related rail on the watch page. Same card logic as the feed, but the
+    // column is far too narrow for an inline accordion, so the panel opens as
+    // a wider popup anchored to the card. It is absolutely positioned in page
+    // coordinates, so it scrolls with the page instead of hanging over it.
+    related: {
+      name: 'related',
+      kind: 'grid',
+      panelMode: 'popup',
+      matches: (pathname) => pathname === '/watch',
+      gridSelector: '#related #contents, #secondary #contents, #related',
+      cardSelector: 'ytd-compact-video-renderer, yt-lockup-view-model',
+      thumbnailSelectors: THUMBNAIL_SELECTORS,
+      getVideoId: extractVideoId,
+    },
+  };
+
+  // More than one surface can be live at once - /watch hosts both the player
+  // (single) and the related-videos rail (grid) - so this returns all matches.
+  ns.getActiveSurfaces = function () {
+    const path = location.pathname;
+    return Object.values(ns.surfaces).filter((s) => s.matches(path));
+  };
+
+  ns.getCurrentSurface = function () {
+    return ns.getActiveSurfaces()[0] || null;
+  };
+
+  ns.getSurfaceByName = function (name) {
+    return ns.surfaces[name] || null;
+  };
+})(window.__ytSummarizer);
