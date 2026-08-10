@@ -61,19 +61,27 @@ setInterval(() => {
 
 // ---------- plumbing ----------
 
+const CORS_METHODS = {
+  'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, X-Yts-User',
+  'Access-Control-Max-Age': '86400',
+};
+
 function corsHeaders(origin) {
+  // No Origin header at all means this is not a browser cross-origin request:
+  // curl, a platform health check, or an extension service worker that Chrome
+  // exempted because host_permissions already grant access. CORS has nothing
+  // to say about those, and rejecting them would lock out the extension the
+  // allowlist exists to serve.
+  if (!origin) return { 'Access-Control-Allow-Origin': '*', ...CORS_METHODS };
+
   const allowed = config.allowedOrigins.includes('*')
     ? '*'
     : config.allowedOrigins.includes(origin)
       ? origin
       : null;
   if (!allowed) return null;
-  return {
-    'Access-Control-Allow-Origin': allowed,
-    'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, X-Yts-User',
-    'Access-Control-Max-Age': '86400',
-  };
+  return { 'Access-Control-Allow-Origin': allowed, ...CORS_METHODS };
 }
 
 function send(res, status, body, extraHeaders) {
