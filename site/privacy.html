@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Privacy Policy — YouTube Feed Summariser</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header>
+      <a class="brand" href="./">
+        <svg width="20" height="20" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <path d="M2 4h12M2 8h12M2 12h8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+        </svg>
+        Feed Summariser
+      </a>
+      <nav>
+        <a href="privacy.html">Privacy</a>
+        <a href="terms.html">Terms</a>
+      </nav>
+    </header>
+
+    <main>
+      <h1>Privacy Policy</h1>
+      <!-- TODO: set this to the date you publish, and update it on every change. -->
+      <p class="updated">Last updated: DD MONTH 2026</p>
+
+      <p>
+        This extension is run by an individual, not a company. It collects as
+        little as it can get away with, and none of it is sold or shared for
+        advertising. This page describes exactly what is stored and why.
+      </p>
+
+      <div class="card">
+        <p>
+          <strong>It does not track your browsing.</strong> The extension only
+          learns about a video when you press Summarise on it. Videos you scroll
+          past, watch, or search for are never recorded.
+        </p>
+      </div>
+
+      <h2>What is collected</h2>
+      <table>
+        <tr>
+          <th>Data</th>
+          <th>Why</th>
+        </tr>
+        <tr>
+          <td>Your Google account ID and email address</td>
+          <td>To sign you in and attach your weekly allowance to an account, so it survives clearing your browser.</td>
+        </tr>
+        <tr>
+          <td>The IDs of videos you press Summarise on, and when</td>
+          <td>So re-opening one is free rather than counting against your allowance again, and to show how many people have summarised a video.</td>
+        </tr>
+        <tr>
+          <td>Minutes of video summarised this week</td>
+          <td>To enforce the free allowance.</td>
+        </tr>
+        <tr>
+          <td>Your thumbs up / thumbs down on a summary</td>
+          <td>To work out when a summary is bad enough to be rewritten for everyone.</td>
+        </tr>
+      </table>
+
+      <p>
+        No payment details are collected, because there is nothing to pay for.
+        No advertising or analytics trackers are used. No profile of your
+        interests is built.
+      </p>
+
+      <h2>Who it is shared with</h2>
+      <p>
+        To produce a summary, the URL of the video you asked about is sent to
+        <strong>Google's Gemini API</strong>, which watches it and writes the
+        summary. Your identity is not sent with it — Google receives the video
+        URL, not who asked. Google's handling of that request is covered by
+        their own
+        <a href="https://ai.google.dev/gemini-api/terms" rel="noopener">API terms</a>.
+      </p>
+      <p>
+        Signing in uses <strong>Google OAuth</strong>. Only your basic profile
+        (email address and account ID) is requested. The extension cannot read
+        your Gmail, Drive, YouTube account, or anything else.
+      </p>
+      <p>
+        Data is stored on servers operated by the hosting and database providers
+        <!-- TODO: name the providers you actually deploy on. -->
+        used to run the service. It is not shared with anyone else, and it is
+        never sold.
+      </p>
+
+      <h2>How long it is kept</h2>
+      <p>
+        Your account and the record of videos you have summarised are kept until
+        you delete them. Usage counters reset weekly. Summaries themselves are
+        kept indefinitely, because they are shared with everyone else who opens
+        the same video — they contain nothing about you.
+      </p>
+
+      <h2>Deleting your data</h2>
+      <p>
+        Open the extension's settings and press <strong>Delete my data</strong>.
+        This immediately and permanently removes your account, your summarised
+        video history, your votes and your usage counters. It cannot be undone.
+      </p>
+      <p>
+        Summaries you were the first to request stay available to other readers.
+        They are AI-written descriptions of public videos and contain no
+        information about you, and removing them would force other people to
+        regenerate the same text.
+      </p>
+
+      <h2>Your rights</h2>
+      <p>
+        If you are in the EU or UK, the GDPR gives you the right to access,
+        correct, export or erase your personal data, and to object to its
+        processing. Erasure is available immediately via the button described
+        above. For anything else, get in touch at the address below and it will
+        be handled within 30 days.
+      </p>
+      <p>
+        The legal basis for processing is your consent, given when you sign in,
+        together with the legitimate interest in preventing abuse of a free
+        service.
+      </p>
+
+      <h2>Children</h2>
+      <p>
+        This service is not directed at children under 13, and accounts for them
+        are not knowingly created.
+      </p>
+
+      <h2>Changes</h2>
+      <p>
+        If this policy changes materially, the date at the top will change and
+        the new version will be published here before it takes effect.
+      </p>
+
+      <h2>Contact</h2>
+      <!-- TODO: your contact address. Required by the Chrome Web Store. -->
+      <p><a href="mailto:CONTACT@EXAMPLE.COM">CONTACT@EXAMPLE.COM</a></p>
+    </main>
+
+    <footer>
+      <span>YouTube Feed Summariser</span>
+      <span>
+        <a href="./">Home</a> ·
+        <a href="terms.html">Terms</a>
+      </span>
+    </footer>
+  </body>
+</html>
