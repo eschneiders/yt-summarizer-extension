@@ -11,5 +11,8 @@
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
     "test": "node test/api.test.mjs"
+  },
+  "dependencies": {
+    "pg": "^8.23.0"
   }
 }

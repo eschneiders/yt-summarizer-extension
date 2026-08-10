@@ -109,13 +109,22 @@ section('a cached summary still costs the reader, unless it is theirs');
 
 section('weekly quota');
 {
-  const user = crypto.randomUUID();
-  const limit = (await get(user, '/v1/me/quota')).quota.limitSeconds;
+  // Spends a user's whole allowance. Takes the remaining balance each round
+  // rather than assuming the quota divides evenly into equal videos - the
+  // server refuses anything larger than what is left, so a fixed chunk size
+  // stalls with a remainder still on the clock.
+  const burnAllowance = async (user) => {
+    for (;;) {
+      const { remainingSeconds } = (await get(user, '/v1/me/quota')).quota;
+      if (remainingSeconds === 0) return;
+      await post(user, `/v1/videos/${newVideoId()}/view`, {
+        durationSeconds: Math.min(3600, remainingSeconds),
+      });
+    }
+  };
 
-  // Burn the whole allowance on hour-long videos.
-  for (let spent = 0; spent < limit; spent += 3600) {
-    await post(user, `/v1/videos/${newVideoId()}/view`, { durationSeconds: 3600 });
-  }
+  const user = crypto.randomUUID();
+  await burnAllowance(user);
   ok('allowance is spent', (await get(user, '/v1/me/quota')).quota.remainingSeconds === 0);
 
   const fresh = newVideoId();
@@ -127,9 +136,7 @@ section('weekly quota');
   await post(crypto.randomUUID(), `/v1/videos/${owned}/view`, { durationSeconds: 60 });
   const poor = crypto.randomUUID();
   await post(poor, `/v1/videos/${owned}/view`, { durationSeconds: 60 });
-  for (let spent = 0; spent < limit; spent += 3600) {
-    await post(poor, `/v1/videos/${newVideoId()}/view`, { durationSeconds: 3600 });
-  }
+  await burnAllowance(poor);
   r = await post(poor, `/v1/videos/${owned}/view`, { durationSeconds: 60 });
   ok('a video they already paid for still opens when out of quota', r.status === 200);
 }
@@ -175,6 +182,86 @@ section('downvote threshold, capped at one rewrite');
   await vote(flipper, 'up');
   r = await vote(flipper, null);
   ok('clearing a vote works', r.stats.yourVote === null);
+}
+
+// --------------------------------------------------------------- summarising
+
+section('summarise endpoint');
+{
+  // Talks to the same database the server is using, so a summary can be seeded
+  // without paying Gemini for one.
+  const { writeSummary, logGeminiCall, pool } = await import('../src/db.js');
+
+  // Reads an SSE response into a list of {event, data}.
+  const stream = async (user, videoId, durationSeconds) => {
+    const res = await fetch(`${BASE}/v1/videos/${videoId}/summary`, {
+      method: 'POST',
+      headers: { 'X-Yts-User': user, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ durationSeconds }),
+    });
+    const events = [];
+    for (const block of (await res.text()).split('\n\n')) {
+      const e = block.match(/^event: (.+)$/m);
+      const d = block.match(/^data: (.+)$/m);
+      if (e && d) events.push({ event: e[1], data: JSON.parse(d[1]) });
+    }
+    return { status: res.status, contentType: res.headers.get('content-type'), events, res };
+  };
+
+  const alice = crypto.randomUUID();
+  const bob = crypto.randomUUID();
+  const video = newVideoId();
+
+  let r = await stream(alice, video, 600);
+  ok('responds as an event stream', r.contentType?.includes('text/event-stream'));
+  ok('refuses over the length cap', (await stream(alice, newVideoId(), 99999)).events.at(-1)
+    .data.code === 'TOO_LONG');
+
+  // Seed a summary as though someone had already generated it.
+  await writeSummary(video, 1, '# Already written\n\nBody.', 'test-model');
+
+  r = await stream(alice, video, 600);
+  let done = r.events.at(-1);
+  ok('an existing summary is served', done.event === 'done' && done.data.ok);
+  ok('and is NOT regenerated', done.data.generated === false);
+  ok('it arrives whole, with no delta events', !r.events.some((e) => e.event === 'delta'));
+  ok('alice is billed for reading it', done.data.quota.usedSeconds === 600);
+
+  r = await stream(alice, video, 600);
+  ok('alice re-reading her own is free', r.events.at(-1).data.quota.usedSeconds === 600);
+
+  r = await stream(bob, video, 600);
+  done = r.events.at(-1);
+  ok('bob gets the same summary', done.data.markdown.includes('Already written'));
+  ok('bob is billed for it too', done.data.quota.usedSeconds === 600);
+  ok('the counter now shows two people', done.data.stats.summarisedBy === 2);
+
+  // The spend cap. Log a call that blows through it, then confirm a video with
+  // no existing summary is refused before Gemini is touched.
+  const capUser = crypto.randomUUID();
+  await logGeminiCall({
+    videoId: newVideoId(),
+    userId: capUser,
+    durationSeconds: 60,
+    cost: { inputTokens: 0, outputTokens: 0, thoughtTokens: 0, totalUsd: 999 },
+  });
+  try {
+    r = await stream(crypto.randomUUID(), newVideoId(), 600);
+    ok('a new generation is refused once the cap is hit', r.events.at(-1).data.code === 'SPEND_CAP',
+      JSON.stringify(r.events.at(-1).data));
+
+    // Crucially, already-generated summaries keep working - the cap stops new
+    // spending, it does not take the service down.
+    r = await stream(crypto.randomUUID(), video, 600);
+    ok('existing summaries still serve under the cap', r.events.at(-1).data.ok === true);
+  } finally {
+    await pool.query('DELETE FROM gemini_calls WHERE user_id = $1', [capUser]);
+  }
+
+  r = await stream(crypto.randomUUID(), newVideoId(), 600);
+  ok('once under the cap again, it reaches the key check', r.events.at(-1).data.code === 'NO_API_KEY');
+
+  await pool.end();
 }
 
 // ------------------------------------------------------------------ rejects

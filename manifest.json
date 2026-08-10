@@ -2,15 +2,13 @@
   "manifest_version": 3,
   "name": "YouTube Feed Summariser (dev)",
   "version": "0.2.0",
-  "description": "Injects a Summarise button into YouTube feed thumbnails and renders an AI-generated summary panel. Local dev build, not shippable.",
+  "description": "Adds a Summarise button to YouTube video cards and shows an AI-written summary inline, so you can tell what a video covers before committing 20 minutes to it.",
   "background": {
     "service_worker": "background/service-worker.js",
     "type": "module"
   },
   "permissions": ["storage"],
   "host_permissions": [
-    "https://*.youtube.com/*",
-    "https://generativelanguage.googleapis.com/*",
     "http://localhost:8787/*"
   ],
   "options_page": "options/options.html",

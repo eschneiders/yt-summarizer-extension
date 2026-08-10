@@ -19,10 +19,15 @@ const ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/interactions'
 // video-capable tier: $0.30/$2.50 per Mtok against $1.50/$7.50 for 3.6-flash.
 export const MODEL = 'gemini-3.5-flash-lite';
 
-// USD per 1M tokens, PAID tier. The free tier bills nothing at all, so on a
-// free-tier key the real charge is $0 and these figures are only "what this
-// would cost if you were paying". Hardcoded, so they go stale silently if
-// Google changes them - check ai.google.dev/gemini-api/docs/pricing.
+// USD per 1M tokens, paid tier - which is now the real bill, not a hypothetical
+// one: the server holds the key and pays for every call. Hardcoded, so they go
+// stale silently if Google changes them - check
+// ai.google.dev/gemini-api/docs/pricing.
+//
+// These rates overstate observed spend by roughly 4x. Measured across 120
+// videos averaging ~20 minutes, actual cost was $0.26, or about 92 minutes of
+// video per US cent. The spend cap uses these figures anyway: a cap that errs
+// towards stopping early is the correct direction to be wrong in.
 const PRICE_PER_MTOK_INPUT = 0.3;
 const PRICE_PER_MTOK_OUTPUT = 2.5;
 
@@ -134,7 +139,7 @@ function estimateCost(usage) {
   const derivedTotal = inputTokens + outputTokens + thoughtTokens;
   if (reportedTotal && Math.abs(reportedTotal - derivedTotal) > 1) {
     console.warn(
-      '[yts:sw] token math does not reconcile: API total_tokens=%d but in+out+thoughts=%d. Cost estimate may be off.',
+      '[yts:api] token math does not reconcile: API total_tokens=%d but in+out+thoughts=%d. Cost estimate may be off.',
       reportedTotal,
       derivedTotal
     );
@@ -154,15 +159,12 @@ function estimateCost(usage) {
 
 function logUsage(cost, elapsed, durationSeconds) {
   if (!cost) {
-    console.warn('[yts:sw] no usage returned, cannot estimate cost');
+    console.warn('[yts:api] no usage returned, cannot estimate cost');
     return;
   }
+  console.log(`[yts:api] ${MODEL} · ${elapsed}s · $${cost.totalUsd.toFixed(5)}`);
   console.log(
-    `%c[yts:sw] ${MODEL} · ${elapsed}s · ~$${cost.totalUsd.toFixed(5)} at paid-tier rates`,
-    'color:#4caf50;font-weight:bold'
-  );
-  console.log(
-    '[yts:sw] tokens: %d in ($%s) + %d out billable ($%s, = %d output + %d thinking) = %d total',
+    '[yts:api] tokens: %d in ($%s) + %d out billable ($%s, = %d output + %d thinking) = %d total',
     cost.inputTokens,
     cost.inputUsd.toFixed(5),
     cost.billableOutput,
@@ -178,7 +180,7 @@ function logUsage(cost, elapsed, durationSeconds) {
     const perSecond = cost.inputTokens / durationSeconds;
     const delta = (1 - perSecond / BASELINE_TOKENS_PER_SECOND) * 100;
     console.log(
-      '[yts:sw] %s input tok/sec of video (baseline %s) → %s%s%% vs baseline',
+      '[yts:api] %s input tok/sec of video (baseline %s) → %s%s%% vs baseline',
       perSecond.toFixed(1),
       BASELINE_TOKENS_PER_SECOND.toFixed(1),
       delta >= 0 ? '-' : '+',
@@ -186,7 +188,7 @@ function logUsage(cost, elapsed, durationSeconds) {
     );
     if (Math.abs(delta) < 5) {
       console.warn(
-        '[yts:sw] input tokens are within 5%% of baseline - resolution:"low" is probably being ignored.'
+        '[yts:api] input tokens are within 5%% of baseline - resolution:"low" is probably being ignored.'
       );
     }
   }
@@ -282,7 +284,7 @@ export async function summarizeYouTubeVideoStreaming({
 
       if (!loggedShape) {
         loggedShape = true;
-        console.log('[yts:sw] first SSE event shape:', Object.keys(evt), evt.type || '(no type)');
+        console.log('[yts:api] first SSE event shape:', Object.keys(evt), evt.type || '(no type)');
       }
 
       usage = extractUsage(evt) || usage;
@@ -313,7 +315,7 @@ export async function summarizeYouTubeVideo({ apiKey, videoUrl, durationSeconds 
 
   const payload = JSON.parse(await res.text());
   if (payload.status && payload.status !== 'completed') {
-    console.warn('[yts:sw] interaction status was "%s"', payload.status);
+    console.warn('[yts:api] interaction status was "%s"', payload.status);
   }
 
   let text = payload.output_text || '';

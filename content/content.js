@@ -141,15 +141,7 @@
         ns.panel.renderPartial(text, meta, videoId);
       };
 
-      const res = await summarizeStreaming(
-        {
-          videoId,
-          durationSeconds,
-          override: !!(options && options.override),
-          refresh: !!(options && options.refresh),
-        },
-        paintPartial
-      );
+      const res = await summarizeStreaming({ videoId, durationSeconds }, paintPartial);
 
       // The card may have been recycled to a different video while Gemini was
       // working - in that case this summary no longer belongs on screen.
@@ -162,14 +154,10 @@
         const code = res && res.code;
         console.error('[yts] summarise failed for %s: %s', videoId, res && res.error);
         ns.panel.renderError((res && res.error) || 'Unknown error', {
-          needsApiKey: code === 'NO_API_KEY',
-          onOverride:
-            code === 'TOO_LONG'
-              ? () => {
-                  ns.resetButtonState(btn);
-                  ns.handleSummarizeClick(videoId, btn, { override: true });
-                }
-              : null,
+          // Both mean "this extension is not pointed at a working service",
+          // which is a settings problem rather than a video problem.
+          needsSettings: code === 'NO_SERVICE' || code === 'OFFLINE',
+          quota: code === 'QUOTA_EXCEEDED' ? res.quota : null,
         });
         btn.classList.remove('yts-loading');
         btn.classList.add('yts-error');
@@ -181,34 +169,14 @@
         return;
       }
 
-      window.__ytsLastSummary = res;
-
-      // Logged here as well as in the service worker: SW logs land in a
-      // separate DevTools window that you have to open on purpose, and this is
-      // the console you are actually looking at.
-      if (res.cached) {
-        console.log(
-          '%c[yts] cache hit — no API call, $0',
-          'color:#4caf50;font-weight:bold'
-        );
-      } else if (res.cost) {
-        const c = res.cost;
-        console.log(
-          `%c[yts] ~$${c.totalUsd.toFixed(5)} at paid-tier rates%c  (${c.inputTokens.toLocaleString()} in + ${c.outputTokens.toLocaleString()} out + ${c.thoughtTokens.toLocaleString()} thinking)  ·  session: ~$${(
-            res.sessionCostUsd || 0
-          ).toFixed(5)} over ${res.sessionCalls || 1} call(s)`,
-          'color:#4caf50;font-weight:bold',
-          'color:inherit;font-weight:normal'
-        );
-        console.log(
-          '%c[yts] on a free-tier key the actual charge is $0 — the figure above is what it would cost if you were paying.',
-          'color:#999'
-        );
-      }
-      console.log('[yts] summary rendered for %s via %s', videoId, res.model);
+      console.log(
+        '[yts] %s: %s',
+        videoId,
+        res.generated ? 'generated fresh' : 'served from the shared store, nothing generated'
+      );
       ns.summarisedIds.add(videoId);
-      meta.yourVote = res.yourVote || null;
       meta.stats = res.stats || null;
+      meta.yourVote = res.stats ? res.stats.yourVote : null;
       ns.panel.renderSummary(res.markdown, meta, videoId);
       ns.resetButtonState(btn);
     } catch (err) {

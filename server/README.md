@@ -14,19 +14,24 @@ service only holds counters.
 
 ## Running it
 
-Node **22.5+** (25 recommended). No dependencies — `node:http` and
-`node:sqlite`, nothing to install.
+Node **22.5+** (25 recommended) and a Postgres database. One dependency (`pg`).
 
 ```bash
-cd server && npm start
+createdb yts_test && cd server && npm install && npm start
 ```
+
+`DATABASE_URL` defaults to `postgres://localhost:5432/yts_test`. The schema in
+`src/schema.sql` is applied idempotently at boot, so there is nothing to run by
+hand. On a hosted database also set `YTS_DATABASE_SSL=true`.
+
+Postgres rather than SQLite for one reason that has nothing to do with scale:
+on a container host the filesystem is usually ephemeral, so a SQLite file
+quietly vanishes on redeploy unless a volume is mounted exactly right. A
+managed database removes that whole class of accident.
 
 Then put `http://localhost:8787` into the extension's options page. Leave that
 field empty and the extension runs exactly as it did before this existed: local
 cache, local votes, no counter, no limit.
-
-Node still prints an `ExperimentalWarning` for `node:sqlite`. The API is stable
-in Node 24+; the warning is noise.
 
 ## Tests
 
@@ -49,8 +54,10 @@ All optional, all environment variables:
 | Variable | Default | Meaning |
 |---|---|---|
 | `PORT` | `8787` | Listen port |
-| `YTS_DB_PATH` | `./data/yts.sqlite` | SQLite file |
-| `YTS_WEEKLY_QUOTA_MINUTES` | `300` | Free-tier minutes of video per ISO week |
+| `DATABASE_URL` | local `yts_test` | Postgres connection string |
+| `YTS_DATABASE_SSL` | `false` | Set `true` on hosted Postgres |
+| `YTS_POOL_SIZE` | `10` | Postgres connection pool size |
+| `YTS_WEEKLY_QUOTA_MINUTES` | `400` | Free-tier minutes of video per ISO week |
 | `YTS_DOWNVOTE_MINIMUM` | `3` | Downvotes needed before a summary can be retired |
 | `YTS_DOWNVOTE_RATIO` | `0.6` | Share of votes that must be down |
 | `YTS_MAX_REVISION` | `2` | Highest revision reachable — 2 means one rewrite |

@@ -1,6 +1,4 @@
-const keyInput = document.getElementById('key');
 const serviceInput = document.getElementById('service');
-const reveal = document.getElementById('reveal');
 const statusEl = document.getElementById('status');
 const quotaEl = document.getElementById('quota');
 
@@ -9,66 +7,72 @@ function setStatus(text) {
   if (text) setTimeout(() => (statusEl.textContent = ''), 2500);
 }
 
-function formatMinutes(seconds) {
-  return `${Math.round(seconds / 60)} min`;
+const minutes = (seconds) => `${Math.round(seconds / 60)} min`;
+
+function baseUrl() {
+  return serviceInput.value.trim().replace(/\/+$/, '');
 }
 
-// Reads the allowance straight from the service rather than from anything
-// cached here - the whole point of a server-side quota is that the client is
-// not the source of truth for it.
+async function request(path, method = 'GET') {
+  const base = baseUrl();
+  const { ytsUserId } = await chrome.storage.local.get(['ytsUserId']);
+  if (!base || !ytsUserId) return null;
+  const res = await fetch(`${base}${path}`, { method, headers: { 'X-Yts-User': ytsUserId } });
+  return res.json();
+}
+
+// Read from the service rather than from anything stored here: the whole point
+// of a server-side allowance is that the client is not the source of truth.
 async function loadQuota() {
-  const base = serviceInput.value.trim().replace(/\/+$/, '');
-  if (!base) {
-    quotaEl.textContent = 'Running locally — no weekly limit, no shared counter.';
+  if (!baseUrl()) {
+    quotaEl.textContent = 'No service configured — summaries are unavailable.';
     return;
   }
 
   const { ytsUserId } = await chrome.storage.local.get(['ytsUserId']);
   if (!ytsUserId) {
-    quotaEl.textContent = 'Not connected yet — summarise one video to register this browser.';
+    quotaEl.textContent = 'Not connected yet — summarise a video to register this browser.';
     return;
   }
 
   quotaEl.textContent = 'Checking…';
   try {
-    const res = await fetch(`${base}/v1/me/quota`, { headers: { 'X-Yts-User': ytsUserId } });
-    const json = await res.json();
-    if (!json.ok) throw new Error(json.error || `HTTP ${res.status}`);
+    const json = await request('/v1/me/quota');
+    if (!json || !json.ok) throw new Error((json && json.error) || 'unexpected response');
     const q = json.quota;
-    quotaEl.textContent = `This week: ${formatMinutes(q.usedSeconds)} of ${formatMinutes(
-      q.limitSeconds
-    )} used · resets ${new Date(q.resetsAt).toLocaleDateString()}`;
+    quotaEl.textContent =
+      `${minutes(q.usedSeconds)} of ${minutes(q.limitSeconds)} used this week · ` +
+      `resets ${new Date(q.resetsAt).toLocaleDateString()}`;
   } catch (err) {
     quotaEl.textContent = `Could not reach the service (${err.message}).`;
   }
 }
 
 async function load() {
-  const { geminiApiKey, serviceUrl } = await chrome.storage.local.get([
-    'geminiApiKey',
-    'serviceUrl',
-  ]);
-  if (geminiApiKey) keyInput.value = geminiApiKey;
+  const { serviceUrl } = await chrome.storage.local.get(['serviceUrl']);
   if (serviceUrl) serviceInput.value = serviceUrl;
   loadQuota();
 }
 
-reveal.addEventListener('change', () => {
-  keyInput.type = reveal.checked ? 'text' : 'password';
-});
-
 document.getElementById('save').addEventListener('click', async () => {
-  const key = keyInput.value.trim();
-  const serviceUrl = serviceInput.value.trim().replace(/\/+$/, '');
-  await chrome.storage.local.set({ geminiApiKey: key, serviceUrl });
+  await chrome.storage.local.set({ serviceUrl: baseUrl() });
   setStatus('Saved.');
   loadQuota();
 });
 
-document.getElementById('clear').addEventListener('click', async () => {
-  await chrome.storage.local.remove('geminiApiKey');
-  keyInput.value = '';
-  setStatus('Key cleared.');
+document.getElementById('delete').addEventListener('click', async () => {
+  if (!confirm('Delete everything the service knows about you? This cannot be undone.')) return;
+  try {
+    const json = await request('/v1/me', 'DELETE');
+    if (!json || !json.ok) throw new Error((json && json.error) || 'unexpected response');
+    // The local id goes too, otherwise the next request silently recreates the
+    // same account and "deleted" would not mean much.
+    await chrome.storage.local.remove('ytsUserId');
+    setStatus('Deleted.');
+    loadQuota();
+  } catch (err) {
+    setStatus(`Failed: ${err.message}`);
+  }
 });
 
 load();

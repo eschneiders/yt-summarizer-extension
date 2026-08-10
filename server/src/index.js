@@ -1,7 +1,17 @@
 import { createServer } from 'node:http';
 
 import { config } from './config.js';
-import { readStats, readQuota, commitView, castVote, hasViewed } from './db.js';
+import {
+  readStats,
+  readQuota,
+  commitView,
+  castVote,
+  hasViewed,
+  listViewedVideos,
+  deleteUserData,
+  migrate,
+} from './db.js';
+import { summarise, SummariseError } from './summarise.js';
 
 // No framework: five routes, a JSON body and a CORS header. Every dependency
 // this service does not have is one it cannot be compromised through.
@@ -60,7 +70,7 @@ function corsHeaders(origin) {
   if (!allowed) return null;
   return {
     'Access-Control-Allow-Origin': allowed,
-    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, X-Yts-User',
     'Access-Control-Max-Age': '86400',
   };
@@ -75,6 +85,67 @@ function send(res, status, body, extraHeaders) {
     ...extraHeaders,
   });
   res.end(payload);
+}
+
+// ---------- server-sent events ----------
+//
+// The summarise endpoint streams because a generation takes tens of seconds and
+// watching text arrive is the difference between "working" and "hung". Anything
+// already generated is sent as a single done event - there is nothing to wait
+// for, so pretending to stream it would only add latency.
+function openStream(res, cors) {
+  res.writeHead(200, {
+    ...cors,
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-store',
+    Connection: 'keep-alive',
+    // Without this, nginx and most platform proxies buffer the whole response
+    // and the stream arrives all at once at the end.
+    'X-Accel-Buffering': 'no',
+  });
+  return (event, data) => {
+    if (res.writableEnded) return;
+    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  };
+}
+
+async function handleSummariseStream(req, res, cors, userId, videoId, durationSeconds) {
+  const send = openStream(res, cors);
+
+  // If the client goes away mid-generation we still finish and store the
+  // summary: it has been paid for either way, and the next reader gets it free.
+  let clientGone = false;
+  req.on('close', () => {
+    clientGone = true;
+  });
+
+  try {
+    const result = await summarise({
+      videoId,
+      userId,
+      durationSeconds,
+      onDelta: (markdown) => {
+        if (!clientGone) send('delta', { markdown });
+      },
+    });
+    send('done', {
+      ok: true,
+      markdown: result.markdown,
+      model: result.model,
+      generated: result.generated,
+      stats: result.stats,
+      quota: result.quota,
+    });
+  } catch (err) {
+    if (err instanceof SummariseError) {
+      send('failed', { ok: false, code: err.code, error: err.message, ...err.extra });
+    } else {
+      console.error('[yts:api] summarise failed for %s:', videoId, err);
+      send('failed', { ok: false, code: 'INTERNAL', error: 'Could not summarise that video.' });
+    }
+  } finally {
+    res.end();
+  }
 }
 
 function readBody(req) {
@@ -109,7 +180,25 @@ async function route(req, url, userId) {
 
   // GET /v1/me/quota
   if (req.method === 'GET' && url.pathname === '/v1/me/quota') {
-    return { status: 200, body: { ok: true, quota: readQuota(userId) } };
+    return { status: 200, body: { ok: true, quota: await readQuota(userId) } };
+  }
+
+  // GET /v1/me/videos
+  // Every video this user has paid for, which is what decides whether a card
+  // in the feed says "Summarise" or "Summarised". Sent as a whole list rather
+  // than queried per card: it is a few thousand 11-character strings at worst,
+  // and the alternative is a request every time the feed scrolls.
+  if (req.method === 'GET' && url.pathname === '/v1/me/videos') {
+    return { status: 200, body: { ok: true, videoIds: await listViewedVideos(userId) } };
+  }
+
+  // DELETE /v1/me
+  // The GDPR erasure route, and the one people skip. Wired to a button in the
+  // extension's settings so it is actually reachable, not just documented.
+  if (req.method === 'DELETE' && url.pathname === '/v1/me') {
+    const result = await deleteUserData(userId);
+    console.log('[yts:api] erased data for %s (%d views)', userId, result.viewsDeleted);
+    return { status: 200, body: { ok: true, ...result } };
   }
 
   // /v1/videos/:videoId[/view|/vote]
@@ -122,10 +211,8 @@ async function route(req, url, userId) {
     // Quota rides along with the stats because the client wants both at the
     // same instant - it is deciding whether to spend a summarise on this video.
     if (req.method === 'GET' && parts.length === 3) {
-      return {
-        status: 200,
-        body: { ok: true, stats: readStats(videoId, userId), quota: readQuota(userId) },
-      };
+      const [stats, quota] = await Promise.all([readStats(videoId, userId), readQuota(userId)]);
+      return { status: 200, body: { ok: true, stats, quota } };
     }
 
     if (req.method === 'POST' && parts[3] === 'view' && parts.length === 4) {
@@ -137,26 +224,31 @@ async function route(req, url, userId) {
       // A video this user has already been billed for is free to open again,
       // so it must not be refused when they are out of quota - commitView
       // would not have charged for it either.
-      const quota = readQuota(userId);
-      const repeat = hasViewed(videoId, userId);
+      const [quota, repeat] = await Promise.all([
+        readQuota(userId),
+        hasViewed(videoId, userId),
+      ]);
       if (!repeat && quota.remainingSeconds < durationSeconds) {
         return {
           status: 429,
-          body: { ok: false, code: 'QUOTA_EXCEEDED', quota, stats: readStats(videoId, userId) },
+          body: {
+            ok: false,
+            code: 'QUOTA_EXCEEDED',
+            quota,
+            stats: await readStats(videoId, userId),
+          },
         };
       }
 
-      commitView(videoId, userId, durationSeconds);
-      return {
-        status: 200,
-        body: { ok: true, stats: readStats(videoId, userId), quota: readQuota(userId) },
-      };
+      await commitView(videoId, userId, durationSeconds);
+      const [stats, fresh] = await Promise.all([readStats(videoId, userId), readQuota(userId)]);
+      return { status: 200, body: { ok: true, stats, quota: fresh } };
     }
 
     if (req.method === 'POST' && parts[3] === 'vote' && parts.length === 4) {
       const body = await readBody(req);
       const vote = body.vote === 'up' || body.vote === 'down' ? body.vote : null;
-      const { revision, retired, exhausted } = castVote(videoId, userId, vote);
+      const { revision, retired, exhausted } = await castVote(videoId, userId, vote);
       return {
         status: 200,
         body: {
@@ -170,7 +262,7 @@ async function route(req, url, userId) {
           revision,
           retired,
           exhausted,
-          stats: readStats(videoId, userId),
+          stats: await readStats(videoId, userId),
         },
       };
     }
@@ -221,6 +313,22 @@ const server = createServer(async (req, res) => {
   }
 
   try {
+    // Handled outside route() because it writes to the socket over time rather
+    // than returning one body.
+    const summariseMatch = url.pathname.match(/^\/v1\/videos\/([A-Za-z0-9_-]{11})\/summary$/);
+    if (summariseMatch && req.method === 'POST') {
+      const body = await readBody(req);
+      await handleSummariseStream(
+        req,
+        res,
+        cors,
+        userId,
+        summariseMatch[1],
+        Number(body.durationSeconds) || 0
+      );
+      return;
+    }
+
     const { status, body } = await route(req, url, userId);
     send(res, status, body, cors);
   } catch (err) {
@@ -229,12 +337,17 @@ const server = createServer(async (req, res) => {
   }
 });
 
+// Schema before listener: a request that arrives against a half-created schema
+// fails in a far more confusing way than a few seconds of startup delay.
+await migrate();
+
 server.listen(config.port, () => {
   console.log(
-    '[yts:api] listening on http://localhost:%d · quota %d min/week · re-run at %d downvotes and %d%% down',
+    '[yts:api] listening on http://localhost:%d · quota %d min/week · re-run at %d downvotes and %d%% down (max rev %d)',
     config.port,
     config.weeklyQuotaSeconds / 60,
     config.downvoteMinimum,
-    Math.round(config.downvoteRatio * 100)
+    Math.round(config.downvoteRatio * 100),
+    config.maxRevision
   );
 });

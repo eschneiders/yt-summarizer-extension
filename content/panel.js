@@ -554,20 +554,26 @@ window.__ytSummarizer = window.__ytSummarizer || {};
       box.appendChild(h('div', 'yts-error-title', 'Could not summarise this video'));
       box.appendChild(h('div', 'yts-error-msg', message));
 
+      // A quota refusal is not an error state, so it gets the one piece of
+      // information that actually helps: when it comes back.
+      if (opts && opts.quota && opts.quota.resetsAt) {
+        box.appendChild(
+          h(
+            'div',
+            'yts-error-msg',
+            `Your allowance resets ${new Date(opts.quota.resetsAt).toLocaleDateString()}.`
+          )
+        );
+      }
+
       const row = h('div', 'yts-error-actions');
-      if (opts && opts.needsApiKey) {
+      if (opts && opts.needsSettings) {
         const open = h('button', 'yts-action', 'Open settings');
         open.type = 'button';
         open.addEventListener('click', () =>
           chrome.runtime.sendMessage({ type: 'YTS_OPEN_OPTIONS' })
         );
         row.appendChild(open);
-      }
-      if (opts && opts.onOverride) {
-        const go = h('button', 'yts-action', 'Summarise anyway');
-        go.type = 'button';
-        go.addEventListener('click', opts.onOverride);
-        row.appendChild(go);
       }
       const dismiss = h('button', 'yts-action', 'Close');
       dismiss.type = 'button';
