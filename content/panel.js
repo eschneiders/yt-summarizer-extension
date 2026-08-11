@@ -246,6 +246,22 @@ window.__ytSummarizer = window.__ytSummarizer || {};
   const INLINE_RE =
     /\[?\[([^\]]+)\]\(([^)]+)\)\]?|\*\*([^*]+)\*\*|\*([^*]+)\*|`([^`]+)`|\b(?:\d{1,2}:)?\d{1,2}:\d{2}\b/g;
 
+  // The video element for `videoId`, but only when that video is the one
+  // actually playing on this page. The related rail shows summaries for other
+  // videos, and seeking the player for one of those would jump the wrong film.
+  function playerFor(videoId) {
+    if (location.pathname !== '/watch') return null;
+    let playing = null;
+    try {
+      playing = new URL(location.href).searchParams.get('v');
+    } catch (e) {
+      return null;
+    }
+    if (playing !== videoId) return null;
+    const video = document.querySelector('video');
+    return video && isFinite(video.duration) ? video : null;
+  }
+
   function makeChip(label, videoId) {
     const chip = document.createElement('a');
     chip.className = 'yts-chip';
@@ -255,6 +271,35 @@ window.__ytSummarizer = window.__ytSummarizer || {};
     chip.href = watchUrl(videoId, label);
     chip.target = '_blank';
     chip.rel = 'noopener';
+
+    // On the watch page, a timestamp for the video already on screen should
+    // seek it, not open a second copy of the same video in a new tab.
+    chip.addEventListener('click', (e) => {
+      // Modified clicks mean "open elsewhere" everywhere else on the web, so
+      // leave the anchor to do its normal thing.
+      if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+
+      const video = playerFor(videoId);
+      if (!video) return; // different video, or no player: the href handles it
+
+      e.preventDefault();
+      video.currentTime = timestampToSeconds(label);
+      // play() rejects if the browser blocks it; seeking still worked, so
+      // there is nothing to recover from.
+      const started = video.play();
+      if (started && started.catch) started.catch(() => {});
+
+      // The panel sits under the player, so after a long summary the player
+      // can be off screen - seeking something you cannot see reads as nothing
+      // having happened.
+      const box = video.getBoundingClientRect();
+      if (box.bottom < 80 || box.top > window.innerHeight - 80) {
+        video.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+      chip.classList.add('yts-chip-sought');
+      setTimeout(() => chip.classList.remove('yts-chip-sought'), 600);
+    });
+
     return chip;
   }
 

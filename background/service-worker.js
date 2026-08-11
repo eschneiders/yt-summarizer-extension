@@ -10,7 +10,56 @@ import { api, summariseStream } from './api.js';
 // a round trip anyway - to bill it, to count it, and to find out whether the
 // crowd has retired the copy we would otherwise have served.
 
+// ---------- the toolbar badge ----------
+//
+// The weekly allowance shown on the icon. Account state belongs somewhere
+// account-level, and the icon is glanceable without opening anything - the
+// copy in the summary panel answers "what is this costing me right now",
+// this one answers "where am I generally".
+
+const BADGE_LOW_FRACTION = 0.15;
+
+async function paintBadge(quota) {
+  if (!quota) {
+    // No service configured, or unreachable. An empty badge is honest; a stale
+    // number would not be.
+    await chrome.action.setBadgeText({ text: '' });
+    await chrome.action.setTitle({ title: 'YouTube Feed Summariser' });
+    return;
+  }
+
+  const left = Math.round(quota.remainingSeconds / 60);
+  const limit = Math.round(quota.limitSeconds / 60);
+  const low = quota.remainingSeconds <= quota.limitSeconds * BADGE_LOW_FRACTION;
+
+  await chrome.action.setBadgeText({ text: String(left) });
+  await chrome.action.setBadgeBackgroundColor({ color: low ? '#c2410c' : '#3f3f46' });
+  await chrome.action.setBadgeTextColor({ color: '#ffffff' });
+  await chrome.action.setTitle({
+    title: `YouTube Feed Summariser — ${left} of ${limit} minutes left this week`,
+  });
+}
+
+async function refreshBadge() {
+  const res = await api.quota();
+  await paintBadge(res && res.ok ? res.quota : null);
+}
+
+// MV3 evicts the worker when idle, but badge text is browser state and
+// survives that. These cover the cases where it would otherwise be stale or
+// blank: a fresh install, a browser restart, and a changed service URL.
+chrome.runtime.onInstalled.addListener(() => refreshBadge());
+chrome.runtime.onStartup.addListener(() => refreshBadge());
+
+// No popup, so a click has to do something useful.
+chrome.action.onClicked.addListener(() => chrome.runtime.openOptionsPage());
+
 const HANDLERS = {
+  async YTS_REFRESH_BADGE() {
+    await refreshBadge();
+    return { ok: true };
+  },
+
   // Every video this user has paid for. Decides "Summarise" vs "Summarised".
   async YTS_MINE_IDS() {
     const res = await api.myVideos();
@@ -80,6 +129,9 @@ chrome.runtime.onConnect.addListener((port) => {
         msg.videoId,
         result.generated ? 'generated' : 'served from the shared store'
       );
+      // The response already carries the new balance, so the badge updates
+      // without a second request.
+      if (result.quota) await paintBadge(result.quota);
       post({ type: 'done', result });
     } catch (err) {
       console.error('[yts:sw] stream handler failed', err);

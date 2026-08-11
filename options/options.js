@@ -58,6 +58,9 @@ document.getElementById('save').addEventListener('click', async () => {
   await chrome.storage.local.set({ serviceUrl: baseUrl() });
   setStatus('Saved.');
   loadQuota();
+  // Pointing at a different service means a different allowance, so the
+  // number on the toolbar icon is now wrong until it is re-read.
+  chrome.runtime.sendMessage({ type: 'YTS_REFRESH_BADGE' });
 });
 
 document.getElementById('delete').addEventListener('click', async () => {
@@ -70,6 +73,7 @@ document.getElementById('delete').addEventListener('click', async () => {
     await chrome.storage.local.remove('ytsUserId');
     setStatus('Deleted.');
     loadQuota();
+    chrome.runtime.sendMessage({ type: 'YTS_REFRESH_BADGE' });
   } catch (err) {
     setStatus(`Failed: ${err.message}`);
   }

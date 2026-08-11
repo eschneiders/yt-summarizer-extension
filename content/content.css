@@ -315,6 +315,24 @@ html:not([dark]) .yts-chip {
   color: #1a4fbf;
 }
 
+/* A seek happens in the player above, which may be out of view - this is the
+   acknowledgement that the click registered. */
+.yts-chip-sought {
+  animation: yts-chip-pulse 0.6s ease;
+}
+
+@keyframes yts-chip-pulse {
+  0% {
+    transform: scale(1);
+  }
+  35% {
+    transform: scale(1.18);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
 .yts-panel-footer {
   display: flex;
   align-items: center;
