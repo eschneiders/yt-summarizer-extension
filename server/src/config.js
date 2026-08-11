@@ -48,6 +48,17 @@ export const config = {
   // that actually costs money if it leaks. Never sent to a client.
   geminiApiKey: process.env.GEMINI_API_KEY || '',
 
+  // Google sign-in. The client id ships inside the extension and is public by
+  // design; the secret is what lets this server exchange an authorisation code
+  // for an identity, and never leaves it. Using the code flow rather than
+  // returning a token straight to the extension is precisely so the secret can
+  // live here.
+  googleClientId: process.env.GOOGLE_CLIENT_ID || '',
+  googleClientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
+
+  // How long a sign-in lasts before it has to be repeated.
+  sessionDays: num(process.env.YTS_SESSION_DAYS, 90),
+
   // The backstop. Checked before every call that would cost money, so a bug or
   // an attacker hits a wall rather than a bill. At the measured rate of ~92
   // minutes of video per cent, $2 is roughly 180,000 minutes a day - orders of
@@ -105,6 +116,11 @@ export function validateConfig() {
   if (!config.geminiApiKey) {
     console.warn(
       '[yts:api] no GEMINI_API_KEY set - existing summaries will be served, but no new ones can be generated.'
+    );
+  }
+  if (!config.googleClientId || !config.googleClientSecret) {
+    console.warn(
+      '[yts:api] GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET are not both set - nobody can sign in, so every request will be rejected.'
     );
   }
   if (config.allowedOrigins.includes('*')) {

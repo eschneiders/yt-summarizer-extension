@@ -9,9 +9,19 @@ import {
   hasViewed,
   listViewedVideos,
   deleteUserData,
+  hitRateLimit,
+  pruneRateLimits,
   migrate,
 } from './db.js';
 import { summarise, SummariseError } from './summarise.js';
+import {
+  signInWithGoogle,
+  signOut,
+  resolveSession,
+  hashUserId,
+  pruneSessions,
+  AuthError,
+} from './auth.js';
 
 // No framework: five routes, a JSON body and a CORS header. Every dependency
 // this service does not have is one it cannot be compromised through.
@@ -21,49 +31,33 @@ const MAX_BODY_BYTES = 4096;
 // YouTube ids are exactly 11 url-safe characters. Anything else is either a
 // bug in the client or someone poking at the endpoint.
 const VIDEO_ID_RE = /^[A-Za-z0-9_-]{11}$/;
-const USER_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // ---------- identity ----------
 //
-// The client mints a UUID on install and sends it on every request. That is
-// enough to give each browser its own quota and its own vote, and it holds no
-// personal data. It is also trivially forgeable: anyone can rotate the header
-// and get a fresh 300 minutes. That is acceptable while summarising happens on
-// the client's own API key - the moment the *server* starts paying for Gemini
-// calls, this has to become real authentication.
-function identify(req) {
-  const id = req.headers['x-yts-user'];
-  return typeof id === 'string' && USER_ID_RE.test(id) ? id.toLowerCase() : null;
+// A bearer session token, issued only after a Google sign-in this server
+// verified itself. It replaces the client-minted UUID that came before, which
+// anyone could rotate for a fresh allowance - fine while each user paid for
+// their own Gemini calls, not fine now that the server pays.
+async function identify(req) {
+  const header = req.headers.authorization || '';
+  const token = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
+  return resolveSession(token);
 }
 
-// ---------- rate limiting ----------
+// ---------- housekeeping ----------
 //
-// Fixed window per user id, in memory. Resets when the process restarts, which
-// is fine for what it defends against: a runaway client loop, not an attacker.
-const hits = new Map();
-
-function rateLimited(userId) {
-  const minute = Math.floor(Date.now() / 60000);
-  const entry = hits.get(userId);
-  if (!entry || entry.minute !== minute) {
-    hits.set(userId, { minute, count: 1 });
-    return false;
-  }
-  entry.count += 1;
-  return entry.count > config.rateLimitPerMinute;
-}
-
-// Unbounded growth would be a slow leak on a long-running process.
+// Rate limiting now lives in Postgres (see hitRateLimit) so it holds across a
+// restart and across instances. What is left here is the sweeping.
 setInterval(() => {
-  const minute = Math.floor(Date.now() / 60000);
-  for (const [key, entry] of hits) if (entry.minute < minute) hits.delete(key);
-}, 60000).unref();
+  pruneRateLimits().catch((err) => console.warn('[yts:api] rate-limit prune:', err.message));
+  pruneSessions().catch((err) => console.warn('[yts:api] session prune:', err.message));
+}, 300000).unref();
 
 // ---------- plumbing ----------
 
 const CORS_METHODS = {
   'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, X-Yts-User',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
   'Access-Control-Max-Age': '86400',
 };
 
@@ -117,7 +111,7 @@ function openStream(res, cors) {
   };
 }
 
-async function handleSummariseStream(req, res, cors, userId, videoId, durationSeconds) {
+async function handleSummariseStream(req, res, cors, auth, videoId, durationSeconds) {
   const send = openStream(res, cors);
 
   // If the client goes away mid-generation we still finish and store the
@@ -130,7 +124,7 @@ async function handleSummariseStream(req, res, cors, userId, videoId, durationSe
   try {
     const result = await summarise({
       videoId,
-      userId,
+      auth,
       durationSeconds,
       onDelta: (markdown) => {
         if (!clientGone) send('delta', { markdown });
@@ -183,12 +177,25 @@ function readBody(req) {
 
 // ---------- routes ----------
 
-async function route(req, url, userId) {
+async function route(req, url, auth) {
   const parts = url.pathname.split('/').filter(Boolean);
+  const { userId } = auth;
+
+  // GET /v1/me
+  if (req.method === 'GET' && url.pathname === '/v1/me') {
+    return {
+      status: 200,
+      body: {
+        ok: true,
+        user: { email: auth.email, plan: auth.plan },
+        quota: await readQuota(userId, auth),
+      },
+    };
+  }
 
   // GET /v1/me/quota
   if (req.method === 'GET' && url.pathname === '/v1/me/quota') {
-    return { status: 200, body: { ok: true, quota: await readQuota(userId) } };
+    return { status: 200, body: { ok: true, quota: await readQuota(userId, auth) } };
   }
 
   // GET /v1/me/videos
@@ -204,7 +211,9 @@ async function route(req, url, userId) {
   // The GDPR erasure route, and the one people skip. Wired to a button in the
   // extension's settings so it is actually reachable, not just documented.
   if (req.method === 'DELETE' && url.pathname === '/v1/me') {
-    const result = await deleteUserData(userId);
+    // The hash is what lets erasure stay honest without handing back a fresh
+    // allowance - see deleteUserData.
+    const result = await deleteUserData(userId, await hashUserId(userId));
     console.log('[yts:api] erased data for %s (%d views)', userId, result.viewsDeleted);
     return { status: 200, body: { ok: true, ...result } };
   }
@@ -219,7 +228,10 @@ async function route(req, url, userId) {
     // Quota rides along with the stats because the client wants both at the
     // same instant - it is deciding whether to spend a summarise on this video.
     if (req.method === 'GET' && parts.length === 3) {
-      const [stats, quota] = await Promise.all([readStats(videoId, userId), readQuota(userId)]);
+      const [stats, quota] = await Promise.all([
+        readStats(videoId, userId),
+        readQuota(userId, auth),
+      ]);
       return { status: 200, body: { ok: true, stats, quota } };
     }
 
@@ -233,7 +245,7 @@ async function route(req, url, userId) {
       // so it must not be refused when they are out of quota - commitView
       // would not have charged for it either.
       const [quota, repeat] = await Promise.all([
-        readQuota(userId),
+        readQuota(userId, auth),
         hasViewed(videoId, userId),
       ]);
       if (!repeat && quota.remainingSeconds < durationSeconds) {
@@ -249,7 +261,10 @@ async function route(req, url, userId) {
       }
 
       await commitView(videoId, userId, durationSeconds);
-      const [stats, fresh] = await Promise.all([readStats(videoId, userId), readQuota(userId)]);
+      const [stats, fresh] = await Promise.all([
+        readStats(videoId, userId),
+        readQuota(userId, auth),
+      ]);
       return { status: 200, body: { ok: true, stats, quota: fresh } };
     }
 
@@ -309,13 +324,39 @@ const server = createServer(async (req, res) => {
     return;
   }
 
-  const userId = identify(req);
-  if (!userId) {
-    send(res, 401, { ok: false, error: 'X-Yts-User must be a UUID' }, cors);
+  // Signing in is the one thing you cannot already be signed in for.
+  if (req.method === 'POST' && url.pathname === '/v1/auth/google') {
+    try {
+      const body = await readBody(req);
+      const result = await signInWithGoogle(body);
+      console.log('[yts:api] signed in %s (%s)', result.user.user_id, result.user.plan);
+      send(res, 200, { ok: true, ...result }, cors);
+    } catch (err) {
+      const known = err instanceof AuthError;
+      if (!known) console.error('[yts:api] sign-in failed:', err);
+      send(
+        res,
+        known ? 400 : 500,
+        { ok: false, code: known ? err.code : 'INTERNAL', error: err.message },
+        cors
+      );
+    }
     return;
   }
 
-  if (rateLimited(userId)) {
+  const auth = await identify(req);
+  if (!auth) {
+    send(res, 401, { ok: false, code: 'SIGN_IN_REQUIRED', error: 'Sign in to continue.' }, cors);
+    return;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/v1/auth/logout') {
+    await signOut((req.headers.authorization || '').slice(7).trim());
+    send(res, 200, { ok: true }, cors);
+    return;
+  }
+
+  if (await hitRateLimit(auth.userId, config.rateLimitPerMinute)) {
     send(res, 429, { ok: false, code: 'RATE_LIMITED', error: 'too many requests' }, cors);
     return;
   }
@@ -330,14 +371,14 @@ const server = createServer(async (req, res) => {
         req,
         res,
         cors,
-        userId,
+        auth,
         summariseMatch[1],
         Number(body.durationSeconds) || 0
       );
       return;
     }
 
-    const { status, body } = await route(req, url, userId);
+    const { status, body } = await route(req, url, auth);
     send(res, status, body, cors);
   } catch (err) {
     console.error('[yts:api] %s %s failed:', req.method, url.pathname, err.message);

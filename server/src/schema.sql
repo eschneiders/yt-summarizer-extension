@@ -6,6 +6,56 @@
 -- deliberate: the API hands these straight to JavaScript clients, and one
 -- representation end to end is one fewer place for a timezone to go wrong.
 
+-- Small key/value store for things that must be stable across restarts but
+-- should not be a deployment variable someone can forget to set.
+CREATE TABLE IF NOT EXISTS settings (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+
+-- user_id is the Google `sub` claim: stable for the life of the account, and
+-- not the email, which people change.
+CREATE TABLE IF NOT EXISTS users (
+  user_id      TEXT PRIMARY KEY,
+  email        TEXT,
+  -- 'free' is metered against the weekly allowance. 'unlimited' skips it.
+  plan         TEXT   NOT NULL DEFAULT 'free',
+  created_at   BIGINT NOT NULL,
+  last_seen_at BIGINT NOT NULL
+);
+
+-- Opaque random strings, not JWTs. Every request hits the database anyway to
+-- check quota, so a signed token buys nothing and costs the ability to revoke:
+-- deleting the row logs someone out immediately.
+CREATE TABLE IF NOT EXISTS sessions (
+  token      TEXT PRIMARY KEY,
+  user_id    TEXT   NOT NULL REFERENCES users (user_id) ON DELETE CASCADE,
+  created_at BIGINT NOT NULL,
+  expires_at BIGINT NOT NULL
+);
+
+-- Erasure must not hand back a fresh allowance. When an account is deleted its
+-- usage for the current week survives here, keyed by a salted hash of the id
+-- rather than the id itself, and readQuota counts it. Signing up again with the
+-- same Google account lands on the same hash, so the week stays spent. Rows
+-- older than the current week are pruned - the abuse they prevent has expired
+-- along with the week.
+CREATE TABLE IF NOT EXISTS retired_usage (
+  user_hash TEXT    NOT NULL,
+  week      TEXT    NOT NULL,
+  seconds   INTEGER NOT NULL,
+  PRIMARY KEY (user_hash, week)
+);
+
+-- Rate limiting in the database rather than in memory, so it holds across a
+-- restart and across more than one instance.
+CREATE TABLE IF NOT EXISTS rate_limits (
+  user_id TEXT    NOT NULL,
+  minute  BIGINT  NOT NULL,
+  count   INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (user_id, minute)
+);
+
 CREATE TABLE IF NOT EXISTS videos (
   video_id      TEXT PRIMARY KEY,
   -- Bumped when downvotes cross the threshold. Clients holding a summary from
@@ -67,6 +117,7 @@ CREATE TABLE IF NOT EXISTS gemini_calls (
   created_at       BIGINT NOT NULL
 );
 
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions (user_id);
 CREATE INDEX IF NOT EXISTS idx_votes_video   ON votes (video_id, revision);
 CREATE INDEX IF NOT EXISTS idx_views_video   ON views (video_id);
 -- The spend cap sums this window before every call, so it must be indexed.

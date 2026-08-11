@@ -710,6 +710,16 @@ window.__ytSummarizer = window.__ytSummarizer || {};
       }
 
       const row = h('div', 'yts-error-actions');
+      if (opts && opts.onSignIn) {
+        const signIn = h('button', 'yts-action', 'Sign in with Google');
+        signIn.type = 'button';
+        signIn.addEventListener('click', async () => {
+          signIn.disabled = true;
+          signIn.textContent = 'Opening Google…';
+          await opts.onSignIn();
+        });
+        row.appendChild(signIn);
+      }
       if (opts && opts.needsSettings) {
         const open = h('button', 'yts-action', 'Open settings');
         open.type = 'button';

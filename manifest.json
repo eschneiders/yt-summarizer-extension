@@ -24,7 +24,8 @@
     "default_title": "YouTube Feed Summariser"
   },
   "permissions": [
-    "storage"
+    "storage",
+    "identity"
   ],
   "host_permissions": [
     "http://localhost:8787/*",

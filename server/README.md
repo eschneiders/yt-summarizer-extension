@@ -1,16 +1,20 @@
 # yts-server
 
-Shared counters for the YouTube Feed Summariser extension. It exists because
-three of the extension's features are things no browser can know on its own:
+The backend for the YouTube Feed Summariser extension. It holds the Gemini key,
+generates summaries, and stores one copy of each for everyone to read.
+
+That last part is the whole design. A video is summarised **once**; every reader
+after the first gets that same text instantly and for nothing. It is what makes
+the free tier affordable, and it is why three of the extension's features have
+to live here rather than in the browser:
 
 - **"N others summarised this"** — needs a count across users.
 - **Thumbs-down re-runs** — needs everyone's votes in one place to know when a
   summary has been rejected by enough readers.
-- **300 minutes a week** — needs a per-user total that survives a cache clear.
+- **A weekly allowance** — needs a per-user total that survives a cache clear,
+  attached to an account rather than a browser.
 
-It does **not** store or generate summaries. Those are still produced by the
-extension with the user's own Gemini key and cached in their browser. This
-service only holds counters.
+The extension stores nothing of its own. It is a renderer and a router.
 
 ## Running it
 
@@ -29,9 +33,9 @@ on a container host the filesystem is usually ephemeral, so a SQLite file
 quietly vanishes on redeploy unless a volume is mounted exactly right. A
 managed database removes that whole class of accident.
 
-Then put `http://localhost:8787` into the extension's options page. Leave that
-field empty and the extension runs exactly as it did before this existed: local
-cache, local votes, no counter, no limit.
+Then put `http://localhost:8787` into the extension's options page and sign in.
+Without a service URL the extension cannot summarise anything at all — there is
+no local fallback any more, because there is no local Gemini key.
 
 ## Tests
 
@@ -41,11 +45,16 @@ With the server running in another terminal:
 cd server && npm test
 ```
 
-36 assertions against a live instance, covering the extension's real
-`background/api.js` as well as the HTTP surface: billing rules, quota
-exhaustion, the downvote threshold and its one-rewrite cap, and the degradation
-paths when the service is absent or unreachable. Each run mints fresh video and
-user ids, so it is safe against a database that already has data in it.
+71 assertions against a live instance, covering the extension's real
+`background/api.js` as well as the HTTP surface: session handling and
+revocation, billing rules, quota exhaustion, the unlimited plan, erasure that
+cannot refill an allowance, the downvote threshold and its one-rewrite cap, the
+spend cap, and the refusal of anything that cannot be metered.
+
+Sessions are created by writing to the database directly rather than through a
+test-only endpoint — a backdoor that mints sessions is a backdoor whether or not
+it is labelled one. Each run mints fresh ids, so it is safe to re-run against a
+database that already has data in it.
 
 ## Configuration
 
@@ -53,6 +62,11 @@ All optional, all environment variables:
 
 | Variable | Default | Meaning |
 |---|---|---|
+| `GEMINI_API_KEY` | — | Pays for every generation. Without it, stored summaries still serve. |
+| `GOOGLE_CLIENT_ID` | — | OAuth client. Public; also hardcoded in the extension. |
+| `GOOGLE_CLIENT_SECRET` | — | **Secret.** Only this server ever holds it. |
+| `YTS_DAILY_SPEND_CAP_USD` | `2` | Hard stop on generations for a rolling 24h |
+| `YTS_SESSION_DAYS` | `90` | How long a sign-in lasts |
 | `PORT` | `8787` | Listen port |
 | `DATABASE_URL` | local `yts_test` | Postgres connection string |
 | `YTS_DATABASE_SSL` | `false` | Set `true` on hosted Postgres |
@@ -66,12 +80,15 @@ All optional, all environment variables:
 
 ## API
 
-Every route except `/v1/health` requires an `X-Yts-User: <uuid>` header. The
-extension mints that UUID on first use and keeps it in `chrome.storage.local`.
+Every route except `/v1/health` and `POST /v1/auth/google` requires
+`Authorization: Bearer <session token>`.
 
 | Route | Returns |
 |---|---|
 | `GET /v1/health` | `{ok}` |
+| `POST /v1/auth/google` | `{ok, sessionToken, user}` |
+| `POST /v1/auth/logout` | `{ok}` |
+| `GET /v1/me` | `{ok, user, quota}` |
 | `GET /v1/me/quota` | `{ok, quota}` |
 | `GET /v1/videos/:id` | `{ok, stats, quota}` |
 | `POST /v1/videos/:id/view` | `{ok, stats, quota}`, or `429 QUOTA_EXCEEDED` |
@@ -103,15 +120,34 @@ to serve. `youViewed` on the stats response is what the extension keys off: it
 shows "Summarised" and skips billing only for videos this user has personally
 been billed for. Re-opening your own is always free and never re-billed.
 
+### Signing in
+
+Authorisation-code flow with PKCE. The extension opens Google via
+`chrome.identity.launchWebAuthFlow`, gets a one-time code, and posts it here;
+this server exchanges it using the client secret and issues an opaque session
+token. The secret never reaches the extension — a secret shipped inside a
+downloadable zip is not a secret.
+
+Session tokens are random strings in a table, not JWTs. Every request hits the
+database anyway to check quota, so a signed token buys nothing and costs the
+ability to revoke: deleting the row logs someone out instantly.
+
+### Plans
+
+`users.plan` is `free` or `unlimited`. Unlimited still records usage — you can
+see what a friend costs you — but is never refused:
+
+```sql
+UPDATE users SET plan = 'unlimited' WHERE email = 'friend@example.com';
+```
+
 ## Before this is public
 
-Two things are deliberately unfinished, and both matter the moment this is not
-just your machine:
-
-1. **The user id is asserted, not authenticated.** Anyone can send a fresh UUID
-   and get another 300 minutes, or vote as many times as they like from a loop.
-   That is tolerable while each user pays for their own Gemini calls — the quota
-   is advisory and the votes are low-stakes. It is not tolerable once the server
-   pays for anything. That needs real accounts.
+1. **The client asserts the video's duration**, and the allowance is metered
+   against it. Fine while the only client is ours; a hand-written one could
+   claim a three-hour video is sixty seconds. The fix is looking the duration up
+   server-side via the YouTube Data API. Do this before strangers get the link.
 2. **`YTS_ALLOWED_ORIGINS` defaults to `*`.** Set it to your extension's
    `chrome-extension://<id>` origin.
+3. **Set a real `YTS_DAILY_SPEND_CAP_USD`.** It is the only thing between a bug
+   and a bill.

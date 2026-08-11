@@ -1,4 +1,5 @@
 import { api, summariseStream } from './api.js';
+import { signIn, signOut, getUser, getSessionToken } from './auth.js';
 
 // This used to hold the Gemini key, a summary cache, a vote store and a list of
 // which videos were "yours". All of it now lives on the server, because all of
@@ -64,6 +65,36 @@ chrome.runtime.onStartup.addListener(() => refreshBadge());
 chrome.action.onClicked.addListener(() => chrome.runtime.openOptionsPage());
 
 const HANDLERS = {
+  // Sign-in has to run here rather than in the options page: launchWebAuthFlow
+  // needs the extension context, and the resulting session belongs to the
+  // whole extension rather than to whichever page happened to ask.
+  async YTS_SIGN_IN() {
+    const result = await signIn();
+    if (result.ok) await refreshBadge();
+    return result;
+  },
+
+  async YTS_SIGN_OUT() {
+    await signOut();
+    await paintBadge(null);
+    return { ok: true };
+  },
+
+  async YTS_AUTH_STATE() {
+    return { ok: true, signedIn: !!(await getSessionToken()), user: await getUser() };
+  },
+
+  // Erasure signs you out as well: the server drops the session along with
+  // everything else, so keeping a dead token here would only produce
+  // confusing 401s.
+  async YTS_DELETE_ME() {
+    const res = await api.deleteMe();
+    if (!res || !res.ok) return { ok: false, error: (res && res.error) || 'request failed' };
+    await signOut();
+    await paintBadge(null);
+    return { ok: true, ...res };
+  },
+
   async YTS_REFRESH_BADGE() {
     await refreshBadge();
     return { ok: true };

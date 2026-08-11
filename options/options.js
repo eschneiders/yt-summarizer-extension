@@ -1,96 +1,116 @@
 const serviceInput = document.getElementById('service');
 const statusEl = document.getElementById('status');
 const quotaEl = document.getElementById('quota');
+const accountEl = document.getElementById('account');
+const signInBtn = document.getElementById('signin');
+const signOutBtn = document.getElementById('signout');
 
 function setStatus(text) {
   statusEl.textContent = text;
   if (text) setTimeout(() => (statusEl.textContent = ''), 2500);
 }
 
-const minutes = (seconds) => `${Math.round(seconds / 60)} min`;
+const minutes = (seconds) =>
+  Number.isFinite(seconds) ? `${Math.round(seconds / 60)} min` : 'unlimited';
 
-function baseUrl() {
-  return serviceInput.value.trim().replace(/\/+$/, '');
-}
+const baseUrl = () => serviceInput.value.trim().replace(/\/+$/, '');
 
-async function request(path, method = 'GET') {
-  const base = baseUrl();
-  const { ytsUserId } = await chrome.storage.local.get(['ytsUserId']);
-  if (!base || !ytsUserId) return null;
-  const res = await fetch(`${base}${path}`, { method, headers: { 'X-Yts-User': ytsUserId } });
-  return res.json();
-}
-
-// Read from the service rather than from anything stored here: the whole point
-// of a server-side allowance is that the client is not the source of truth.
-async function loadQuota() {
-  if (!baseUrl()) {
-    quotaEl.textContent = 'No service configured — summaries are unavailable.';
-    return;
-  }
-
-  const { ytsUserId } = await chrome.storage.local.get(['ytsUserId']);
-  if (!ytsUserId) {
-    quotaEl.textContent = 'Not connected yet — summarise a video to register this browser.';
-    return;
-  }
-
-  quotaEl.textContent = 'Checking…';
-  try {
-    const json = await request('/v1/me/quota');
-    if (!json || !json.ok) throw new Error((json && json.error) || 'unexpected response');
-    showQuota(json.quota);
-    // The service worker owns the stored copy, so ask it to re-read rather
-    // than writing a second one from here - two writers for one value is how
-    // displays start disagreeing with each other.
-    chrome.runtime.sendMessage({ type: 'YTS_REFRESH_BADGE' });
-  } catch (err) {
-    quotaEl.textContent = `Could not reach the service (${err.message}).`;
-  }
-}
+// The service worker owns the session, so everything that needs it goes
+// through a message rather than this page reading the token itself. One place
+// that knows how to sign in is easier to keep correct than two.
+const ask = (type) => chrome.runtime.sendMessage({ type });
 
 function showQuota(q) {
-  quotaEl.textContent =
-    `${minutes(q.usedSeconds)} of ${minutes(q.limitSeconds)} used this week · ` +
-    `resets ${new Date(q.resetsAt).toLocaleDateString()}`;
+  if (!q) {
+    quotaEl.textContent = '—';
+    return;
+  }
+  quotaEl.textContent = q.unlimited
+    ? `${minutes(q.usedSeconds)} used this week · no limit on your account`
+    : `${minutes(q.usedSeconds)} of ${minutes(q.limitSeconds)} used this week · ` +
+      `resets ${new Date(q.resetsAt).toLocaleDateString()}`;
 }
 
 // This page can sit open while you summarise things in another tab, so it
 // follows the stored figure rather than showing whatever was true when it
 // loaded.
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === 'local' && changes.quota && changes.quota.newValue) {
-    showQuota(changes.quota.newValue);
-  }
+  if (area === 'local' && changes.quota) showQuota(changes.quota.newValue);
 });
+
+async function refreshAccount() {
+  if (!baseUrl()) {
+    accountEl.textContent = 'Set a service URL first.';
+    signInBtn.disabled = true;
+    return;
+  }
+  signInBtn.disabled = false;
+
+  const state = await ask('YTS_AUTH_STATE');
+  const signedIn = state && state.signedIn;
+
+  signInBtn.hidden = signedIn;
+  signOutBtn.hidden = !signedIn;
+
+  if (!signedIn) {
+    accountEl.textContent = 'Not signed in. Summaries need an account.';
+    quotaEl.textContent = '—';
+    return;
+  }
+
+  const user = state.user || {};
+  accountEl.textContent =
+    `Signed in as ${user.email || 'your Google account'}` +
+    (user.plan && user.plan !== 'free' ? ` · ${user.plan}` : '');
+
+  // Ask the worker to re-read the allowance; the storage listener above paints
+  // whatever comes back.
+  ask('YTS_REFRESH_BADGE');
+}
 
 async function load() {
   const { serviceUrl, quota } = await chrome.storage.local.get(['serviceUrl', 'quota']);
   if (serviceUrl) serviceInput.value = serviceUrl;
-  if (quota) showQuota(quota); // instant, then confirmed against the server
-  loadQuota();
+  if (quota) showQuota(quota);
+  refreshAccount();
 }
 
 document.getElementById('save').addEventListener('click', async () => {
   await chrome.storage.local.set({ serviceUrl: baseUrl() });
   setStatus('Saved.');
-  loadQuota();
-  // Pointing at a different service means a different allowance, so the
-  // number on the toolbar icon is now wrong until it is re-read.
-  chrome.runtime.sendMessage({ type: 'YTS_REFRESH_BADGE' });
+  refreshAccount();
+});
+
+signInBtn.addEventListener('click', async () => {
+  signInBtn.disabled = true;
+  setStatus('Opening Google…');
+  const res = await ask('YTS_SIGN_IN');
+  signInBtn.disabled = false;
+  // Closing the Google window is a decision, not a failure worth reporting.
+  if (res && res.ok) setStatus('Signed in.');
+  else if (res && !res.cancelled) setStatus(res.error || 'Sign-in failed.');
+  else setStatus('');
+  refreshAccount();
+});
+
+signOutBtn.addEventListener('click', async () => {
+  await ask('YTS_SIGN_OUT');
+  setStatus('Signed out.');
+  refreshAccount();
 });
 
 document.getElementById('delete').addEventListener('click', async () => {
   if (!confirm('Delete everything the service knows about you? This cannot be undone.')) return;
+
+  const state = await ask('YTS_AUTH_STATE');
+  if (!state || !state.signedIn) return setStatus('Sign in first.');
+
   try {
-    const json = await request('/v1/me', 'DELETE');
-    if (!json || !json.ok) throw new Error((json && json.error) || 'unexpected response');
-    // The local id goes too, otherwise the next request silently recreates the
-    // same account and "deleted" would not mean much.
-    await chrome.storage.local.remove('ytsUserId');
+    // Deletion needs the session, so it goes through the worker's client.
+    const res = await chrome.runtime.sendMessage({ type: 'YTS_DELETE_ME' });
+    if (!res || !res.ok) throw new Error((res && res.error) || 'unexpected response');
     setStatus('Deleted.');
-    loadQuota();
-    chrome.runtime.sendMessage({ type: 'YTS_REFRESH_BADGE' });
+    refreshAccount();
   } catch (err) {
     setStatus(`Failed: ${err.message}`);
   }

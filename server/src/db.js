@@ -131,20 +131,61 @@ export async function hasViewed(videoId, userId) {
   return rows.length > 0;
 }
 
-export async function readQuota(userId, now = Date.now()) {
+// `userHash` lets a deleted-and-recreated account keep the week it already
+// spent - see the retired_usage table. `plan` of 'unlimited' is reported as an
+// allowance nothing can exhaust, so every caller can go on treating the quota
+// as a number instead of special-casing a class of user.
+export async function readQuota(userId, { plan = 'free', userHash = null } = {}, now = Date.now()) {
   const week = weekKey(now);
   const { rows } = await pool.query(
-    'SELECT seconds FROM weekly_usage WHERE user_id = $1 AND week = $2',
-    [userId, week]
+    `SELECT
+       COALESCE((SELECT seconds FROM weekly_usage  WHERE user_id   = $1 AND week = $2), 0)
+     + COALESCE((SELECT seconds FROM retired_usage WHERE user_hash = $3 AND week = $2), 0)
+       AS used`,
+    [userId, week, userHash]
   );
-  const usedSeconds = rows.length ? rows[0].seconds : 0;
+  const usedSeconds = rows[0].used;
+
+  if (plan === 'unlimited') {
+    return {
+      usedSeconds,
+      limitSeconds: Infinity,
+      remainingSeconds: Infinity,
+      unlimited: true,
+      week,
+      resetsAt: weekResetsAt(now),
+    };
+  }
+
   return {
     usedSeconds,
     limitSeconds: config.weeklyQuotaSeconds,
     remainingSeconds: Math.max(0, config.weeklyQuotaSeconds - usedSeconds),
+    unlimited: false,
     week,
     resetsAt: weekResetsAt(now),
   };
+}
+
+// Fixed window per user per minute, in the database so it survives a restart
+// and holds across more than one instance. One extra write per request, which
+// at this scale is free and at any scale is cheaper than a limit that does not
+// actually limit.
+export async function hitRateLimit(userId, limit) {
+  const minute = Math.floor(Date.now() / 60000);
+  const { rows } = await pool.query(
+    `INSERT INTO rate_limits (user_id, minute, count) VALUES ($1, $2, 1)
+     ON CONFLICT (user_id, minute) DO UPDATE SET count = rate_limits.count + 1
+     RETURNING count`,
+    [userId, minute]
+  );
+  return rows[0].count > limit;
+}
+
+export async function pruneRateLimits() {
+  await pool.query('DELETE FROM rate_limits WHERE minute < $1', [
+    Math.floor(Date.now() / 60000) - 5,
+  ]);
 }
 
 // Records that this user summarised this video and bills the video's length
@@ -258,23 +299,38 @@ export async function listViewedVideos(userId) {
 // gemini_calls keeps its rows but loses the user id, because the spend history
 // has to stay intact - it is the accounting record behind the cap.
 //
-// KNOWN HOLE, closes with real authentication: this also clears weekly_usage,
-// so "delete my data" is currently a way to reset your own allowance. It is not
-// worth defending today because identity is a client-minted UUID - anyone
-// wanting a fresh allowance can just send a different one, no deletion needed.
-// Once the user id is a Google `sub` and therefore stable, this must instead
-// retain the current week's usage under a salted hash of the id, with readQuota
-// summing both. That keeps erasure meaningful while making the allowance
-// survive a delete-and-signup cycle.
-export async function deleteUserData(userId) {
+// Erasure that cannot be used to refill your own allowance. The current week's
+// usage is carried over to retired_usage under a salted hash before the
+// identifiable rows go, so signing up again with the same Google account lands
+// on the same hash and the week stays spent. The hash is one-way and expires
+// with the week, so this retains the fact that *someone* spent time, not who.
+export async function deleteUserData(userId, userHash) {
+  const week = weekKey();
+
   return transaction(async (client) => {
+    if (userHash) {
+      await client.query(
+        `INSERT INTO retired_usage (user_hash, week, seconds)
+         SELECT $1, week, seconds FROM weekly_usage WHERE user_id = $2 AND week = $3
+         ON CONFLICT (user_hash, week)
+         DO UPDATE SET seconds = GREATEST(retired_usage.seconds, EXCLUDED.seconds)`,
+        [userHash, userId, week]
+      );
+      // Weeks that have already rolled over cannot be refilled by deleting, so
+      // there is nothing left to protect and no reason to keep the rows.
+      await client.query('DELETE FROM retired_usage WHERE week < $1', [week]);
+    }
+
     const views = await client.query('DELETE FROM views WHERE user_id = $1', [userId]);
     await client.query('DELETE FROM votes WHERE user_id = $1', [userId]);
     await client.query('DELETE FROM weekly_usage WHERE user_id = $1', [userId]);
-    await client.query(
-      "UPDATE gemini_calls SET user_id = 'deleted' WHERE user_id = $1",
-      [userId]
-    );
+    await client.query('DELETE FROM sessions WHERE user_id = $1', [userId]);
+    // The spend history is the accounting record behind the cap, so the rows
+    // stay - but they stop pointing at a person.
+    await client.query("UPDATE gemini_calls SET user_id = 'deleted' WHERE user_id = $1", [
+      userId,
+    ]);
+    await client.query('DELETE FROM users WHERE user_id = $1', [userId]);
     return { viewsDeleted: views.rowCount };
   });
 }

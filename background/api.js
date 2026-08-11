@@ -4,6 +4,8 @@
 // cache, local votes, no counter. A stats endpoint is never worth breaking a
 // summary over.
 
+import { getSessionToken } from './auth.js';
+
 const TIMEOUT_MS = 4000;
 
 // A cached summary opens instantly, and it still asks the service for the
@@ -13,17 +15,13 @@ const TIMEOUT_MS = 4000;
 const COOL_DOWN_MS = 30000;
 let coolDownUntil = 0;
 
-// Anonymous and per-profile. Minted once on first use, holds no personal data,
-// and is the only thing tying a quota and a vote to "a user". Deliberately not
-// an account: see the note on identify() in server/src/index.js for why this
-// has to change before the server pays for anything.
-export async function ensureUserId() {
-  const { ytsUserId } = await chrome.storage.local.get(['ytsUserId']);
-  if (ytsUserId) return ytsUserId;
-  const fresh = crypto.randomUUID();
-  await chrome.storage.local.set({ ytsUserId: fresh });
-  console.log('[yts:sw] minted anonymous user id', fresh);
-  return fresh;
+// Every request carries the session token from a Google sign-in. There is no
+// anonymous mode any more: the server pays for generations, so it has to know
+// who is asking, and an identifier the client makes up for itself is not an
+// answer to that.
+async function authHeader() {
+  const token = await getSessionToken();
+  return token ? { Authorization: `Bearer ${token}` } : null;
 }
 
 async function baseUrl() {
@@ -40,17 +38,16 @@ async function call(path, method, body) {
   if (!base) return null; // local-only mode
   if (Date.now() < coolDownUntil) return null; // service known down, don't wait on it
 
-  const userId = await ensureUserId();
+  const auth = await authHeader();
+  if (!auth) return { status: 401, ok: false, code: 'SIGN_IN_REQUIRED' };
+
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
 
   try {
     const res = await fetch(base + path, {
       method,
-      headers: {
-        'X-Yts-User': userId,
-        ...(body ? { 'Content-Type': 'application/json' } : {}),
-      },
+      headers: { ...auth, ...(body ? { 'Content-Type': 'application/json' } : {}) },
       body: body ? JSON.stringify(body) : undefined,
       signal: controller.signal,
     });
@@ -86,12 +83,16 @@ export async function summariseStream(videoId, durationSeconds, onDelta) {
     return { ok: false, code: 'NO_SERVICE', error: 'No summariser service configured.' };
   }
 
-  const userId = await ensureUserId();
+  const auth = await authHeader();
+  if (!auth) {
+    return { ok: false, code: 'SIGN_IN_REQUIRED', error: 'Sign in to summarise videos.' };
+  }
+
   let res;
   try {
     res = await fetch(`${base}/v1/videos/${videoId}/summary`, {
       method: 'POST',
-      headers: { 'X-Yts-User': userId, 'Content-Type': 'application/json' },
+      headers: { ...auth, 'Content-Type': 'application/json' },
       body: JSON.stringify({ durationSeconds }),
     });
   } catch (err) {
@@ -153,4 +154,5 @@ export const api = {
   vote: (videoId, vote) => call(`/v1/videos/${videoId}/vote`, 'POST', { vote }),
   quota: () => call('/v1/me/quota', 'GET'),
   myVideos: () => call('/v1/me/videos', 'GET'),
+  deleteMe: () => call('/v1/me', 'DELETE'),
 };

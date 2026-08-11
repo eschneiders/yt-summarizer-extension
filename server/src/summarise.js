@@ -48,7 +48,8 @@ export class SummariseError extends Error {
 // whether a summary already exists, whether this user has to be billed, and
 // whether they can afford it. Separated out so the SSE handler can report a
 // refusal before opening a stream.
-export async function planSummary(videoId, userId, durationSeconds) {
+export async function planSummary(videoId, auth, durationSeconds) {
+  const { userId } = auth;
   // A duration of zero used to sail straight through: it is under the length
   // cap, it costs nothing against the weekly allowance, and commitView only
   // bills when seconds > 0. So an unknown duration meant a free, uncapped
@@ -73,7 +74,7 @@ export async function planSummary(videoId, userId, durationSeconds) {
 
   const [stats, quota, alreadyPaid] = await Promise.all([
     readStats(videoId, userId),
-    readQuota(userId),
+    readQuota(userId, auth),
     hasViewed(videoId, userId),
   ]);
 
@@ -119,21 +120,22 @@ async function assertUnderSpendCap() {
  * for a genuine generation - a summary that already exists arrives whole,
  * because there is nothing to wait for.
  */
-export async function summarise({ videoId, userId, durationSeconds, onDelta }) {
-  const plan = await planSummary(videoId, userId, durationSeconds);
+export async function summarise({ videoId, auth, durationSeconds, onDelta }) {
+  const { userId } = auth;
+  const intent = await planSummary(videoId, auth, durationSeconds);
 
   // Someone has already paid to generate this. Serving it costs nothing, but
   // reading it still comes out of the reader's weekly allowance unless it is
   // already theirs.
-  if (plan.existing) {
-    if (plan.needsBilling) await commitView(videoId, userId, durationSeconds);
+  if (intent.existing) {
+    if (intent.needsBilling) await commitView(videoId, userId, durationSeconds);
     const stats = await readStats(videoId, userId);
     return {
-      markdown: plan.existing.markdown,
-      model: plan.existing.model,
+      markdown: intent.existing.markdown,
+      model: intent.existing.model,
       generated: false,
       stats,
-      quota: await readQuota(userId),
+      quota: await readQuota(userId, auth),
     };
   }
 
@@ -183,10 +185,13 @@ export async function summarise({ videoId, userId, durationSeconds, onDelta }) {
     // and a bill.
     await logGeminiCall({ videoId, userId, durationSeconds, cost: result.cost });
 
-    await writeSummary(videoId, plan.stats.revision, result.markdown, result.model);
-    if (plan.needsBilling) await commitView(videoId, userId, durationSeconds);
+    await writeSummary(videoId, intent.stats.revision, result.markdown, result.model);
+    if (intent.needsBilling) await commitView(videoId, userId, durationSeconds);
 
-    const [stats, quota] = await Promise.all([readStats(videoId, userId), readQuota(userId)]);
+    const [stats, quota] = await Promise.all([
+      readStats(videoId, userId),
+      readQuota(userId, auth),
+    ]);
     return {
       markdown: result.markdown,
       model: result.model || MODEL,

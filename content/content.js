@@ -196,6 +196,18 @@
           // which is a settings problem rather than a video problem.
           needsSettings: code === 'NO_SERVICE' || code === 'OFFLINE',
           quota: code === 'QUOTA_EXCEEDED' ? res.quota : null,
+          // Signing in is one click, so offer it here rather than sending
+          // someone to the settings page to find it.
+          onSignIn:
+            code === 'SIGN_IN_REQUIRED'
+              ? async () => {
+                  const result = await sendMessage({ type: 'YTS_SIGN_IN' });
+                  if (result && result.ok) {
+                    ns.resetButtonState(btn);
+                    ns.handleSummarizeClick(videoId, btn);
+                  }
+                }
+              : null,
         });
         btn.classList.remove('yts-loading');
         btn.classList.add('yts-error');
