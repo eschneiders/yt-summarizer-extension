@@ -12,6 +12,7 @@ import {
   hitRateLimit,
   pruneRateLimits,
   pruneIncidents,
+  pruneApiUsage,
   migrate,
 } from './db.js';
 import { summarise, SummariseError, resolveDurationOrRefuse } from './summarise.js';
@@ -65,6 +66,7 @@ setInterval(() => {
   maybeSendDailyDigest().catch((err) => console.warn('[yts:api] daily digest:', err.message));
   maybeSendSpendAlert().catch((err) => console.warn('[yts:api] spend alert:', err.message));
   pruneIncidents().catch((err) => console.warn('[yts:api] incident prune:', err.message));
+  pruneApiUsage().catch((err) => console.warn('[yts:api] api-usage prune:', err.message));
 }, 300000).unref();
 
 // ---------- plumbing ----------

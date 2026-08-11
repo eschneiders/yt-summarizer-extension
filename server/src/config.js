@@ -63,6 +63,16 @@ export const config = {
   youtubeApiKey: process.env.YOUTUBE_API_KEY || '',
   youtubeTimeoutMs: num(process.env.YTS_YOUTUBE_TIMEOUT_MS, 5000),
 
+  // The free tier is 10,000 units a day, and one videos.list call is 1 unit -
+  // so this is really "videos nobody has ever summarised before, per day".
+  // Nothing reports how much is left, so the server counts its own calls and
+  // says something at the halfway mark. Not a limit: crossing it changes
+  // nothing except that a message gets sent, which is the point - it is the
+  // difference between finding out at 5,000 and finding out at 10,000, when
+  // new videos have already started being refused.
+  youtubeDailyQuotaUnits: num(process.env.YTS_YOUTUBE_DAILY_QUOTA, 10000),
+  youtubeQuotaWarnUnits: num(process.env.YTS_YOUTUBE_QUOTA_WARN, 5000),
+
   // Google sign-in. The client id ships inside the extension and is public by
   // design; the secret is what lets this server exchange an authorisation code
   // for an identity, and never leaves it. Using the code flow rather than

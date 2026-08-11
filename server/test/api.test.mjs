@@ -22,10 +22,19 @@ import {
   claimSetting,
   recordIncident,
   readIncidents,
+  bumpYoutubeUnits,
+  readYoutubeUnits,
+  pacificDayKey,
   weekKey,
 } from '../src/db.js';
 import { parseIso8601Duration } from '../src/youtube.js';
-import { formatDigest, measuredUsd, maybeSendDailyDigest, maybeSendSpendAlert } from '../src/digest.js';
+import {
+  formatDigest,
+  measuredUsd,
+  maybeSendDailyDigest,
+  maybeSendSpendAlert,
+  maybeWarnYoutubeQuota,
+} from '../src/digest.js';
 
 const BASE = process.env.YTS_TEST_BASE || 'http://localhost:8787';
 const DAY_MS = 86400000;
@@ -646,6 +655,45 @@ section('daily digest and spend alerts');
   );
 
   await pool.query('DELETE FROM gemini_calls WHERE user_id = $1', ['digest-test']);
+}
+
+// ------------------------------------------------------- youtube api quota
+
+section('YouTube API quota is counted, and warns at halfway');
+{
+  const day = pacificDayKey();
+  ok('the quota day is a Pacific day, not UTC', /^\d{4}-\d{2}-\d{2}$/.test(day), day);
+
+  // Near the UTC/Pacific boundary the two genuinely differ, which is the whole
+  // reason for a separate key: Google resets at midnight Pacific.
+  const utcNoonNextDay = Date.parse('2026-08-12T03:00:00Z'); // 8pm Pacific on the 11th
+  ok(
+    'and it tracks Google\'s reset, not the calendar in UTC',
+    pacificDayKey(utcNoonNextDay) === '2026-08-11',
+    pacificDayKey(utcNoonNextDay)
+  );
+
+  await pool.query('DELETE FROM api_usage WHERE day = $1', [day]);
+  ok('starts at zero', (await readYoutubeUnits()) === 0);
+  ok('a lookup spends one unit', (await bumpYoutubeUnits()) === 1);
+  ok('and they accumulate', (await bumpYoutubeUnits()) === 2);
+  ok('readable without spending one', (await readYoutubeUnits()) === 2);
+
+  // Below the threshold nothing is claimed, so nothing would be sent.
+  await pool.query("DELETE FROM settings WHERE key = 'youtube_quota_warned'");
+  await maybeWarnYoutubeQuota(4999);
+  ok(
+    'under the halfway mark it stays quiet',
+    (await getSetting('youtube_quota_warned')) === null
+  );
+
+  // The claim is what makes it once-a-day; Telegram being unconfigured in tests
+  // means nothing is actually sent, so the claim is checked directly.
+  ok('crossing halfway claims the day', (await claimSetting('youtube_quota_warned', day)) === true);
+  ok('and it only warns once that day', (await claimSetting('youtube_quota_warned', day)) === false);
+
+  await pool.query('DELETE FROM api_usage WHERE day = $1', [day]);
+  await pool.query("DELETE FROM settings WHERE key = 'youtube_quota_warned'");
 }
 
 // ---------------------------------------------------------------- incidents

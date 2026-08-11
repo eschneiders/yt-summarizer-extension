@@ -1,5 +1,6 @@
 import { config } from './config.js';
-import { readVideoDuration, writeVideoDuration } from './db.js';
+import { readVideoDuration, writeVideoDuration, bumpYoutubeUnits } from './db.js';
+import { maybeWarnYoutubeQuota } from './digest.js';
 
 // How long a video actually is, decided here rather than taken from whoever is
 // asking. The client scrapes a duration off the card and sends it, and while
@@ -51,6 +52,14 @@ async function lookup(videoId) {
   const url =
     `${ENDPOINT}?part=contentDetails&id=${encodeURIComponent(videoId)}` +
     `&key=${encodeURIComponent(config.youtubeApiKey)}`;
+
+  // Counted before the call, not after: a request that times out or fails
+  // mid-flight has still reached Google and still spent its unit, and a counter
+  // that only counts successes would read low exactly when things are going
+  // wrong. Erring high is the right direction for a quota warning.
+  bumpYoutubeUnits()
+    .then((units) => maybeWarnYoutubeQuota(units))
+    .catch((err) => console.warn('[yts:api] could not count a YouTube unit:', err.message));
 
   let res;
   try {

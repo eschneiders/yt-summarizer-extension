@@ -7,6 +7,7 @@ import {
   recordIncident,
   readIncidents,
   dayKey,
+  pacificDayKey,
 } from './db.js';
 import { notify } from './notify.js';
 
@@ -66,6 +67,38 @@ export async function reportCritical(kind, detail, now = Date.now()) {
     );
   } catch (err) {
     console.error('[yts:api] could not record incident:', err.message);
+  }
+}
+
+/**
+ * Says something once when the day's YouTube API usage crosses the halfway
+ * mark, so "are we anywhere near that limit" has an answer before the answer
+ * becomes "yes, and new videos are already being refused".
+ *
+ * Called with the running total after each lookup. Silent otherwise, and never
+ * throws - it rides on the duration path, which must not fail because a
+ * notification did.
+ */
+export async function maybeWarnYoutubeQuota(units, now = Date.now()) {
+  try {
+    const warnAt = config.youtubeQuotaWarnUnits;
+    const total = config.youtubeDailyQuotaUnits;
+    if (!warnAt || units < warnAt) return;
+    if (!config.telegramBotToken || !config.telegramChatId) return;
+
+    // Once per Pacific day - the same day the quota itself resets on, so the
+    // warning and the thing it warns about roll over together.
+    if (!(await claimSetting('youtube_quota_warned', pacificDayKey(now)))) return;
+
+    await notify(
+      `YTS heads-up — ${units} of ${total} YouTube API units used today ` +
+        `(resets midnight Pacific).\n\n` +
+        `That is 1 unit per video nobody had summarised before, so this many new ` +
+        `videos in a day is well above normal. At ${total} the server starts ` +
+        `refusing videos it has never seen; ones already summarised keep working.`
+    );
+  } catch (err) {
+    console.error('[yts:api] could not check YouTube quota:', err.message);
   }
 }
 

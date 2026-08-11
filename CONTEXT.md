@@ -66,7 +66,7 @@ server/               Node, one dependency (`pg`)
   src/schema.sql      applied idempotently at boot
   src/notify.js       one Telegram sendMessage call, everything else calls this
   src/digest.js       daily report, spend alerts, critical-failure alerts
-  test/api.test.mjs   120 assertions against a live server
+  test/api.test.mjs   129 assertions against a live server
 ```
 
 Content scripts load in manifest order and share one `window.__ytSummarizer`
@@ -100,7 +100,7 @@ the click handler resolves the surface from that stamp, not from the pathname.
 **Server** (needs Postgres):
 ```bash
 createdb yts_test && cd server && npm install && npm start
-cd server && npm test      # 120 assertions, in another terminal
+cd server && npm test      # 129 assertions, in another terminal
 ```
 
 **Extension**: `chrome://extensions` → Developer mode → Load unpacked. The ID
@@ -220,6 +220,12 @@ perfectly healthy traffic right up until nobody sends any. So `content.js`
 watches for "YouTube has clearly rendered videos and our selector matched none
 of them", three sweeps running, and posts once per surface per page load to
 `POST /v1/telemetry`.
+
+YouTube API units are counted per **Pacific** day (`api_usage`) because that is
+when Google resets the 10,000/day quota — a UTC counter would be out of step for
+the last eight hours of every day. A one-off Telegram heads-up fires at 5,000
+(`YTS_YOUTUBE_QUOTA_WARN`), so "are we close?" is answered before the answer
+becomes "yes, and new videos are already being refused".
 
 To hand a problem to a coding agent:
 

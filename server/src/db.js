@@ -459,6 +459,45 @@ export async function pruneIncidents(now = Date.now(), keepDays = 30) {
   ]);
 }
 
+// ---------- YouTube API quota ----------
+
+// The day Google's quota resets on, which is midnight Pacific - not UTC, and
+// not the server's timezone. en-CA formats as YYYY-MM-DD, which sorts.
+export function pacificDayKey(now = Date.now()) {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Los_Angeles',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date(now));
+}
+
+// Counts one unit of YouTube Data API quota and returns the running total for
+// the day. Atomic, because two lookups landing together must not both read the
+// same total and both write total+1.
+export async function bumpYoutubeUnits(now = Date.now()) {
+  const { rows } = await pool.query(
+    `INSERT INTO api_usage (day, units) VALUES ($1, 1)
+     ON CONFLICT (day) DO UPDATE SET units = api_usage.units + 1
+     RETURNING units`,
+    [pacificDayKey(now)]
+  );
+  return rows[0].units;
+}
+
+export async function readYoutubeUnits(now = Date.now()) {
+  const { rows } = await pool.query('SELECT units FROM api_usage WHERE day = $1', [
+    pacificDayKey(now),
+  ]);
+  return rows.length ? rows[0].units : 0;
+}
+
+export async function pruneApiUsage(now = Date.now(), keepDays = 30) {
+  await pool.query('DELETE FROM api_usage WHERE day < $1', [
+    pacificDayKey(now - keepDays * 86400000),
+  ]);
+}
+
 // ---------- reporting ----------
 
 // Everything the daily digest says, for the half-open interval [startMs, endMs).

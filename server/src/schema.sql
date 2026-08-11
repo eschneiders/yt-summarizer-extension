@@ -153,6 +153,18 @@ CREATE TABLE IF NOT EXISTS incidents (
   PRIMARY KEY (day, kind)
 );
 
+-- Units of YouTube Data API quota spent per day. We have to count these
+-- ourselves: the API bills 1 unit per videos.list call and never tells you how
+-- much of the 10,000/day you have left.
+--
+-- The day here is a *Pacific* day, because that is when Google resets the
+-- quota. Using UTC would put the counter out of step with the thing it is
+-- counting for the last eight hours of every day.
+CREATE TABLE IF NOT EXISTS api_usage (
+  day   TEXT    PRIMARY KEY,
+  units INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions (user_id);
 CREATE INDEX IF NOT EXISTS idx_votes_video   ON votes (video_id, revision);
 CREATE INDEX IF NOT EXISTS idx_views_video   ON views (video_id);
