@@ -129,6 +129,18 @@
         ? surface.getDurationSeconds()
         : ns.readCardDurationSeconds(card);
 
+      // The server refuses an unmeterable request, so this is a loud failure
+      // rather than a silent free summary - but the console should say which
+      // card it was, because the cause is a YouTube markup change on that
+      // card, not anything the user did.
+      if (!durationSeconds) {
+        console.warn(
+          '[yts] could not read a duration for %s from this card - the duration badge selectors in panel.js need updating. Card:',
+          videoId,
+          card
+        );
+      }
+
       // Re-rendering on every delta would thrash layout, so redraw at most a
       // few times a second.
       let lastPaint = 0;

@@ -49,6 +49,21 @@ export class SummariseError extends Error {
 // whether they can afford it. Separated out so the SSE handler can report a
 // refusal before opening a stream.
 export async function planSummary(videoId, userId, durationSeconds) {
+  // A duration of zero used to sail straight through: it is under the length
+  // cap, it costs nothing against the weekly allowance, and commitView only
+  // bills when seconds > 0. So an unknown duration meant a free, uncapped
+  // summary of a video of any length. Refuse instead - a request that cannot
+  // be metered must not be served.
+  //
+  // Note this still trusts a number the client supplies, which is fine while
+  // the client is ours and wrong the moment it is not. See the README.
+  if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
+    throw new SummariseError(
+      'UNKNOWN_DURATION',
+      'Could not work out how long that video is, so it cannot be summarised.'
+    );
+  }
+
   if (durationSeconds > config.maxVideoSeconds) {
     throw new SummariseError(
       'TOO_LONG',

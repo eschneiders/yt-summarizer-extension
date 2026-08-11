@@ -217,6 +217,29 @@ section('summarise endpoint');
   ok('refuses over the length cap', (await stream(alice, newVideoId(), 99999)).events.at(-1)
     .data.code === 'TOO_LONG');
 
+  // A zero duration used to pass every gate: under the length cap, and
+  // commitView only bills when seconds > 0. That made an unknown duration a
+  // free, uncapped summary of a video of any length.
+  for (const bad of [0, -5, null, undefined, 'nonsense']) {
+    const res = await stream(crypto.randomUUID(), newVideoId(), bad);
+    const last = res.events.at(-1);
+    ok(
+      `duration ${JSON.stringify(bad)} is refused, not billed as zero`,
+      last && last.data.code === 'UNKNOWN_DURATION',
+      last ? last.data.code : `no events, HTTP ${res.status}`
+    );
+  }
+
+  // And it must not have quietly recorded the view on the way to refusing.
+  const cheat = crypto.randomUUID();
+  const cheatVideo = newVideoId();
+  await stream(cheat, cheatVideo, 0);
+  ok(
+    'a refused request records nothing',
+    (await get(cheat, `/v1/videos/${cheatVideo}`)).stats.youViewed === false
+  );
+  ok('and bills nothing', (await get(cheat, '/v1/me/quota')).quota.usedSeconds === 0);
+
   // Seed a summary as though someone had already generated it.
   await writeSummary(video, 1, '# Already written\n\nBody.', 'test-model');
 

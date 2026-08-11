@@ -43,6 +43,62 @@ window.__ytSummarizer = window.__ytSummarizer || {};
     return Math.max(1, Math.round(words / 200));
   }
 
+  // Bug 8: this used to be a single selector, and when it stopped matching,
+  // every card reported no duration at all. That is not a cosmetic failure -
+  // the duration is what the weekly allowance is metered against and what the
+  // length cap is checked against, so a card that yields nothing was summarised
+  // for free and without a cap. YouTube has shipped at least four different
+  // duration badges across its Polymer and lockup rollouts, so rather than
+  // trusting any one of them, collect every candidate and take the first whose
+  // text is actually a timestamp.
+  const DURATION_TEXT_RE = /^(?:\d{1,2}:)?\d{1,2}:\d{2}$/;
+
+  const DURATION_SELECTORS = [
+    'ytd-thumbnail-overlay-time-status-renderer #text',
+    'ytd-thumbnail-overlay-time-status-renderer',
+    'yt-thumbnail-overlay-badge-view-model .badge-shape-wiz__text',
+    '.ytThumbnailOverlayBadgeViewModelHost .badge-shape-wiz__text',
+    '.badge-shape-wiz__text',
+    'badge-shape',
+    '[class*="ThumbnailOverlayBadge"]',
+    '[class*="TimeStatus"]',
+  ];
+
+  // YouTube spells the length out in the overlay's accessible name, in exactly
+  // this shape. Matched strictly and anchored: a loose match would also catch
+  // "3 hours ago" from an upload date and bill someone for it.
+  const DURATION_LABEL_RE =
+    /^(?:(\d+)\s*hours?,\s*)?(?:(\d+)\s*minutes?,\s*)?(\d+)\s*seconds?$/i;
+
+  function secondsToTimestamp(total) {
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const s = total % 60;
+    const pad = (n) => String(n).padStart(2, '0');
+    return h ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
+  }
+
+  function readCardDuration(card) {
+    for (const selector of DURATION_SELECTORS) {
+      for (const el of card.querySelectorAll(selector)) {
+        const text = (el.textContent || '').trim().split('\n')[0].trim();
+        if (DURATION_TEXT_RE.test(text)) return text;
+      }
+    }
+
+    for (const el of card.querySelectorAll('[aria-label]')) {
+      const match = DURATION_LABEL_RE.exec((el.getAttribute('aria-label') || '').trim());
+      if (!match) continue;
+      const seconds =
+        Number(match[1] || 0) * 3600 + Number(match[2] || 0) * 60 + Number(match[3] || 0);
+      if (seconds > 0) return secondsToTimestamp(seconds);
+    }
+
+    return '';
+  }
+
+  ns.readCardDuration = readCardDuration;
+
   // Card metadata is scraped from the DOM rather than requested from Gemini -
   // it is already on screen, and asking for it would cost tokens and risk
   // hallucinated titles.
@@ -52,14 +108,11 @@ window.__ytSummarizer = window.__ytSummarizer || {};
       '#channel-name a, ytd-channel-name a, .yt-content-metadata-view-model__metadata-row a'
     );
     const img = card.querySelector('img');
-    const durationEl = card.querySelector(
-      'ytd-thumbnail-overlay-time-status-renderer, .badge-shape-wiz__text, .ytThumbnailOverlayBadgeViewModelHost'
-    );
     return {
       title: titleEl ? titleEl.textContent.trim() : 'Untitled',
       channel: channelEl ? channelEl.textContent.trim() : '',
       thumb: img && img.src && !img.src.startsWith('data:') ? img.src : null,
-      duration: durationEl ? durationEl.textContent.trim().split('\n')[0].trim() : '',
+      duration: readCardDuration(card),
     };
   }
 
