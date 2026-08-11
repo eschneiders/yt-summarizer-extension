@@ -39,18 +39,35 @@ async function loadQuota() {
   try {
     const json = await request('/v1/me/quota');
     if (!json || !json.ok) throw new Error((json && json.error) || 'unexpected response');
-    const q = json.quota;
-    quotaEl.textContent =
-      `${minutes(q.usedSeconds)} of ${minutes(q.limitSeconds)} used this week · ` +
-      `resets ${new Date(q.resetsAt).toLocaleDateString()}`;
+    showQuota(json.quota);
+    // The service worker owns the stored copy, so ask it to re-read rather
+    // than writing a second one from here - two writers for one value is how
+    // displays start disagreeing with each other.
+    chrome.runtime.sendMessage({ type: 'YTS_REFRESH_BADGE' });
   } catch (err) {
     quotaEl.textContent = `Could not reach the service (${err.message}).`;
   }
 }
 
+function showQuota(q) {
+  quotaEl.textContent =
+    `${minutes(q.usedSeconds)} of ${minutes(q.limitSeconds)} used this week · ` +
+    `resets ${new Date(q.resetsAt).toLocaleDateString()}`;
+}
+
+// This page can sit open while you summarise things in another tab, so it
+// follows the stored figure rather than showing whatever was true when it
+// loaded.
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && changes.quota && changes.quota.newValue) {
+    showQuota(changes.quota.newValue);
+  }
+});
+
 async function load() {
-  const { serviceUrl } = await chrome.storage.local.get(['serviceUrl']);
+  const { serviceUrl, quota } = await chrome.storage.local.get(['serviceUrl', 'quota']);
   if (serviceUrl) serviceInput.value = serviceUrl;
+  if (quota) showQuota(quota); // instant, then confirmed against the server
   loadQuota();
 }
 

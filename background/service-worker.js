@@ -40,9 +40,18 @@ async function paintBadge(quota) {
   });
 }
 
+// The single place the current allowance lives on this machine. Everything
+// that displays it - the badge, the settings page, any open summary panel -
+// reads from here and reacts to it changing, rather than each holding its own
+// copy that goes stale the moment a summary is generated somewhere else.
+async function rememberQuota(quota) {
+  await chrome.storage.local.set({ quota: quota || null });
+  await paintBadge(quota);
+}
+
 async function refreshBadge() {
   const res = await api.quota();
-  await paintBadge(res && res.ok ? res.quota : null);
+  await rememberQuota(res && res.ok ? res.quota : null);
 }
 
 // MV3 evicts the worker when idle, but badge text is browser state and
@@ -129,9 +138,9 @@ chrome.runtime.onConnect.addListener((port) => {
         msg.videoId,
         result.generated ? 'generated' : 'served from the shared store'
       );
-      // The response already carries the new balance, so the badge updates
-      // without a second request.
-      if (result.quota) await paintBadge(result.quota);
+      // The response already carries the new balance, so everything that shows
+      // it updates without a second request.
+      if (result.quota) await rememberQuota(result.quota);
       post({ type: 'done', result });
     } catch (err) {
       console.error('[yts:sw] stream handler failed', err);

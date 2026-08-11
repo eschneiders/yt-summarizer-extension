@@ -395,6 +395,18 @@
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return;
     if (Object.keys(changes).some((k) => k.startsWith('mine:'))) ns.refreshSummarisedIds();
+    // The allowance changed - possibly from a summary in another tab. Update
+    // whatever is on screen rather than waiting for the next panel to open.
+    if (changes.quota) {
+      ns.lastQuota = changes.quota.newValue || null;
+      ns.panel.updateQuota(ns.lastQuota);
+    }
+  });
+
+  // Seeded from storage so the very first panel of a session shows a figure
+  // instead of a gap, without needing a request of its own.
+  chrome.storage.local.get(['quota']).then(({ quota }) => {
+    if (quota) ns.lastQuota = quota;
   });
 
   // Bug 1: YouTube is an SPA - navigating between feeds does not reload the

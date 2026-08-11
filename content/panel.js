@@ -148,6 +148,21 @@ window.__ytSummarizer = window.__ytSummarizer || {};
     if (e.key === 'Escape') ns.panel.close();
   }
 
+  // A popup floats over the page, so clicking away from it means "dismiss" -
+  // that is what every other popup on the web does. The in-flow accordion is
+  // deliberately excluded: it occupies a row of the feed rather than covering
+  // anything, and closing it because you clicked a video elsewhere would be
+  // hostile.
+  //
+  // Bubble phase, not capture: the Summarise button stops propagation, so the
+  // very click that opens a panel cannot immediately close it again.
+  function onDocumentClick(e) {
+    if (!el || !anchorSurface || anchorSurface.panelMode !== 'popup') return;
+    if (el.contains(e.target)) return;
+    if (anchorBtn && anchorBtn.contains(e.target)) return;
+    ns.panel.close();
+  }
+
   function ensureEl(card, surface) {
     if (!el) {
       el = h('div', 'yts-panel');
@@ -157,6 +172,7 @@ window.__ytSummarizer = window.__ytSummarizer || {};
     if (!escBound) {
       escBound = true;
       document.addEventListener('keydown', onKeydown, true);
+      document.addEventListener('click', onDocumentClick);
       window.addEventListener('resize', positionPopup);
     }
     // Expand on the next frame so the collapsed height is rendered first and
@@ -173,6 +189,20 @@ window.__ytSummarizer = window.__ytSummarizer || {};
   }
 
   // ---------- rendering ----------
+
+  function buildQuota(quota) {
+    const left = Math.round(quota.remainingSeconds / 60);
+    const node = h('div', 'yts-quota', `${left} min left`);
+    node.title =
+      `${left} of ${Math.round(quota.limitSeconds / 60)} minutes left this week · ` +
+      `resets ${new Date(quota.resetsAt).toLocaleDateString()}`;
+    // Amber near the end, so running out is never a surprise.
+    node.classList.toggle(
+      'yts-quota-low',
+      quota.remainingSeconds <= quota.limitSeconds * 0.15
+    );
+    return node;
+  }
 
   function renderHeader(meta, summary, videoId) {
     const header = h('div', 'yts-panel-header');
@@ -207,18 +237,7 @@ window.__ytSummarizer = window.__ytSummarizer || {};
     // to the last figure the server gave us so it is present while a summary
     // is still streaming, instead of popping in at the end.
     const quota = meta.quota || ns.lastQuota;
-    if (quota) {
-      const left = Math.round(quota.remainingSeconds / 60);
-      const el2 = h('div', 'yts-quota', `${left} min left`);
-      el2.title =
-        `${left} of ${Math.round(quota.limitSeconds / 60)} minutes left this week · ` +
-        `resets ${new Date(quota.resetsAt).toLocaleDateString()}`;
-      // Amber near the end, so running out is never a surprise.
-      if (quota.remainingSeconds <= quota.limitSeconds * 0.15) {
-        el2.classList.add('yts-quota-low');
-      }
-      header.appendChild(el2);
-    }
+    if (quota) header.appendChild(buildQuota(quota));
 
     const close = h('button', 'yts-collapse', '');
     close.type = 'button';
@@ -658,6 +677,7 @@ window.__ytSummarizer = window.__ytSummarizer || {};
       if (escBound) {
         escBound = false;
         document.removeEventListener('keydown', onKeydown, true);
+        document.removeEventListener('click', onDocumentClick);
         window.removeEventListener('resize', positionPopup);
       }
       anchorSurface = null;
@@ -670,6 +690,15 @@ window.__ytSummarizer = window.__ytSummarizer || {};
 
     isOpenFor(videoId) {
       return !!el && anchorVideoId === videoId;
+    },
+
+    // Patches the figure in place on an already-open panel. Re-rendering the
+    // whole panel would work but would also throw away the reader's scroll
+    // position, which is a poor trade for updating four characters.
+    updateQuota(quota) {
+      if (!el || !quota) return;
+      const existing = el.querySelector('.yts-quota');
+      if (existing) existing.replaceWith(buildQuota(quota));
     },
 
     // Bug 2: the grid recycled the card this panel was anchored to, so the
