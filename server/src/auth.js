@@ -2,6 +2,7 @@ import { randomBytes, createHash } from 'node:crypto';
 
 import { config } from './config.js';
 import { pool } from './db.js';
+import { reportCritical, CRITICAL } from './digest.js';
 
 // Google sign-in, authorisation-code flow.
 //
@@ -77,6 +78,13 @@ async function exchangeCode(code, codeVerifier, redirectUri) {
       '[yts:api] code exchange refused: %s %s',
       payload.error || res.status,
       payload.error_description || ''
+    );
+    // A wrong secret or an unregistered redirect URI locks every single person
+    // out, and looks like nothing at all from the outside - exactly the failure
+    // that took an evening to find by hand once already.
+    reportCritical(
+      CRITICAL.AUTH,
+      `${payload.error || res.status} ${payload.error_description || ''}`.trim()
     );
     throw new AuthError('EXCHANGE_FAILED', 'Google would not accept that sign-in.');
   }

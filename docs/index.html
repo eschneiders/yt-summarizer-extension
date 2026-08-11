@@ -37,9 +37,18 @@
         pasting links anywhere.
       </p>
 
-      <!-- TODO: replace with the unlisted Chrome Web Store link once published. -->
-      <a class="cta" href="#install">Add to Chrome</a>
-      <p class="note">Free. Works on your home feed, subscriptions, the watch page and the sidebar.</p>
+      <!-- ONE PLACE TO CHANGE when the unlisted Web Store listing goes live:
+           swap this href for the store URL and drop the "not on the store yet"
+           note below. Until then the button must not pretend to be a store
+           link - it used to point at #install, whose first step then told you
+           to use the button above it. -->
+      <a class="cta" href="#install">How to install</a>
+      <p class="note">
+        Free. Works on your home feed, subscriptions, the watch page and the sidebar.
+        <br />
+        Not on the Chrome Web Store yet — it is in private testing with a handful
+        of people first.
+      </p>
 
       <h2>Why it's fast, and free</h2>
       <p>
@@ -68,10 +77,21 @@
 
       <h2 id="install">Installing</h2>
       <ol class="steps">
-        <li>Install from the Chrome Web Store using the link above.</li>
+        <li>
+          Download the <code>.zip</code> you were sent and unzip it somewhere you
+          will not delete by accident.
+        </li>
+        <li>
+          Open <code>chrome://extensions</code>, turn on <strong>Developer mode</strong>
+          (top right), then click <strong>Load unpacked</strong> and pick that folder.
+        </li>
         <li>Sign in with Google. This is what your weekly allowance is attached to.</li>
         <li>Go to YouTube. Hover any video and hit <strong>Summarise</strong>.</li>
       </ol>
+      <p class="note">
+        Once the Web Store listing is live this becomes a single click and the
+        steps above go away.
+      </p>
 
       <div class="card">
         <h3>What it does not do</h3>

@@ -20,6 +20,8 @@ import {
   setSetting,
   readDigestStats,
   claimSetting,
+  recordIncident,
+  readIncidents,
   weekKey,
 } from '../src/db.js';
 import { parseIso8601Duration } from '../src/youtube.js';
@@ -644,6 +646,88 @@ section('daily digest and spend alerts');
   );
 
   await pool.query('DELETE FROM gemini_calls WHERE user_id = $1', ['digest-test']);
+}
+
+// ---------------------------------------------------------------- incidents
+
+section('critical failures: counted always, alerted once a day');
+{
+  const day = new Date().toISOString().slice(0, 10);
+  await pool.query('DELETE FROM incidents WHERE kind LIKE $1', ['test-%']);
+
+  ok('the first of a kind starts at one', (await recordIncident('test-a', 'boom')) === 1);
+  ok('a repeat folds into the same row', (await recordIncident('test-a', 'boom again')) === 2);
+  ok('a different kind is its own row', (await recordIncident('test-b', 'other')) === 1);
+
+  const rows = await readIncidents(day);
+  const a = rows.find((r) => r.kind === 'test-a');
+  ok('the row keeps the latest message, not the first', a.sample === 'boom again');
+  ok('and the running count', a.count === 2);
+  ok('worst first', rows[0].count >= rows[rows.length - 1].count);
+
+  // Five hundred failures of the same kind must not be five hundred rows -
+  // the second one tells you nothing the first did not.
+  for (let i = 0; i < 20; i++) await recordIncident('test-a', `burst ${i}`);
+  const still = await pool.query('SELECT COUNT(*) AS n FROM incidents WHERE kind = $1', ['test-a']);
+  ok('a storm is still one row', still.rows[0].n === 1);
+
+  // The one-a-day rule, which is the whole point: the claim is per day and
+  // across every kind, so a second failure of any sort stays quiet.
+  await pool.query("DELETE FROM settings WHERE key = 'incident_alert_day'");
+  ok('the first failure of the day claims the alert', (await claimSetting('incident_alert_day', day)) === true);
+  ok('every later one that day is silent', (await claimSetting('incident_alert_day', day)) === false);
+  ok(
+    'and tomorrow can speak again',
+    (await claimSetting('incident_alert_day', '2099-01-01')) === true
+  );
+
+  // A day with no traffic but a broken service is exactly when the report
+  // matters most, so incidents alone are enough to make it send.
+  const withProblem = formatDigest(
+    day,
+    { capped_usd: 0, duration_seconds: 0, generations: 0, new_users: 0, reads: 0, active_readers: 0 },
+    2,
+    [{ kind: 'youtube-layout-changed', count: 12, sample: 'cardSelector matched 0' }]
+  );
+  ok('the report carries the problem and its detail', withProblem.includes('youtube-layout-changed ×12 — cardSelector matched 0'));
+  ok('flagged so it cannot be skimmed past', withProblem.includes('⚠ 1 problem'));
+
+  await pool.query('DELETE FROM incidents WHERE kind LIKE $1', ['test-%']);
+  await pool.query("DELETE FROM settings WHERE key = 'incident_alert_day'");
+}
+
+// -------------------------------------------------------------- telemetry
+
+section('the extension can report that YouTube changed');
+{
+  const user = await newUser();
+  const day = new Date().toISOString().slice(0, 10);
+  await pool.query('DELETE FROM incidents WHERE kind = $1', ['youtube-layout-changed']);
+
+  let r = await post(user, '/v1/telemetry', {
+    kind: 'selectors',
+    surface: 'home',
+    detail: 'cardSelector "ytd-rich-item-renderer" matched 0 of YouTube\'s rendered videos at /',
+  });
+  ok('a layout report is accepted', r.status === 202 && r.ok === true);
+
+  const rows = await readIncidents(day);
+  const hit = rows.find((x) => x.kind === 'youtube-layout-changed');
+  ok('and lands as a critical incident', !!hit, JSON.stringify(rows.map((x) => x.kind)));
+  ok('naming the surface that broke', hit.sample.includes('home'));
+  ok('and the selector that stopped matching', hit.sample.includes('ytd-rich-item-renderer'));
+
+  r = await post(user, '/v1/telemetry', { kind: 'something-else', detail: 'x' });
+  ok('unknown telemetry kinds are refused', r.status === 400);
+
+  const anon = await fetch(`${BASE}/v1/telemetry`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ kind: 'selectors', detail: 'x' }),
+  });
+  ok('and it is not an open endpoint', anon.status === 401);
+
+  await pool.query('DELETE FROM incidents WHERE kind = $1', ['youtube-layout-changed']);
 }
 
 // ------------------------------------------------------------------ rejects

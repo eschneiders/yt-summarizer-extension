@@ -416,6 +416,49 @@ export async function setSetting(key, value) {
   );
 }
 
+// ---------- incidents ----------
+
+// UTC calendar day. Shared by incidents and the digest so "today" means one
+// thing across the whole service.
+export function dayKey(now = Date.now()) {
+  return new Date(now).toISOString().slice(0, 10);
+}
+
+// Records a failure worth a person's attention, folding repeats of the same
+// kind on the same day into one row. Returns the running count, which is what
+// decides whether this is the first of the day and therefore worth an alert.
+export async function recordIncident(kind, sample, now = Date.now()) {
+  const { rows } = await pool.query(
+    `INSERT INTO incidents (day, kind, count, sample, first_at, last_at)
+     VALUES ($1, $2, 1, $3, $4, $4)
+     ON CONFLICT (day, kind) DO UPDATE
+       SET count = incidents.count + 1,
+           sample = EXCLUDED.sample,
+           last_at = EXCLUDED.last_at
+     RETURNING count`,
+    [dayKey(now), kind, String(sample).slice(0, 500), now]
+  );
+  return rows[0].count;
+}
+
+// Everything that broke on a given day, worst first. This is the thing to hand
+// to a coding agent: kind, how often, and the last real message.
+export async function readIncidents(day) {
+  const { rows } = await pool.query(
+    `SELECT kind, count, sample, first_at, last_at
+       FROM incidents WHERE day = $1 ORDER BY count DESC, last_at DESC`,
+    [day]
+  );
+  return rows;
+}
+
+// Incidents stop being actionable long before they stop taking up space.
+export async function pruneIncidents(now = Date.now(), keepDays = 30) {
+  await pool.query('DELETE FROM incidents WHERE day < $1', [
+    dayKey(now - keepDays * 86400000),
+  ]);
+}
+
 // ---------- reporting ----------
 
 // Everything the daily digest says, for the half-open interval [startMs, endMs).

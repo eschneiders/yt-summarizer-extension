@@ -11,10 +11,16 @@ import {
   deleteUserData,
   hitRateLimit,
   pruneRateLimits,
+  pruneIncidents,
   migrate,
 } from './db.js';
 import { summarise, SummariseError, resolveDurationOrRefuse } from './summarise.js';
-import { maybeSendDailyDigest, maybeSendSpendAlert } from './digest.js';
+import {
+  maybeSendDailyDigest,
+  maybeSendSpendAlert,
+  reportCritical,
+  CRITICAL,
+} from './digest.js';
 import {
   signInWithGoogle,
   signOut,
@@ -58,6 +64,7 @@ setInterval(() => {
   // timer to reason about.
   maybeSendDailyDigest().catch((err) => console.warn('[yts:api] daily digest:', err.message));
   maybeSendSpendAlert().catch((err) => console.warn('[yts:api] spend alert:', err.message));
+  pruneIncidents().catch((err) => console.warn('[yts:api] incident prune:', err.message));
 }, 300000).unref();
 
 // ---------- plumbing ----------
@@ -150,6 +157,10 @@ async function handleSummariseStream(req, res, cors, auth, videoId, durationSeco
       send('failed', { ok: false, code: err.code, error: err.message, ...err.extra });
     } else {
       console.error('[yts:api] summarise failed for %s:', videoId, err);
+      // A SummariseError is a decision this service made on purpose. Anything
+      // else reaching here is a bug, and bugs on the summarise path mean the
+      // one thing the service exists to do is not working.
+      reportCritical(CRITICAL.INTERNAL, `summarise ${videoId}: ${err.message}`);
       send('failed', { ok: false, code: 'INTERNAL', error: 'Could not summarise that video.' });
     }
   } finally {
@@ -223,6 +234,26 @@ async function route(req, url, auth) {
     const result = await deleteUserData(userId, await hashUserId(userId));
     console.log('[yts:api] erased data for %s (%d views)', userId, result.viewsDeleted);
     return { status: 200, body: { ok: true, ...result } };
+  }
+
+  // POST /v1/telemetry
+  // The extension reporting that something is wrong on its side - specifically,
+  // that it swept a feed and found no video cards at all. The server has no
+  // other way to learn that YouTube has changed its markup: from here every
+  // request looks perfectly healthy right up until nobody sends any.
+  //
+  // Signed-in only, and the payload is reduced to a known kind and a short
+  // string. This is a doorbell, not a log drain.
+  if (req.method === 'POST' && url.pathname === '/v1/telemetry') {
+    const body = await readBody(req);
+    if (body.kind !== 'selectors') {
+      return { status: 400, body: { ok: false, error: 'unknown telemetry kind' } };
+    }
+    await reportCritical(
+      CRITICAL.SELECTORS,
+      `surface "${String(body.surface || '?').slice(0, 40)}": ${String(body.detail || '').slice(0, 200)}`
+    );
+    return { status: 202, body: { ok: true } };
   }
 
   // /v1/videos/:videoId[/view|/vote]

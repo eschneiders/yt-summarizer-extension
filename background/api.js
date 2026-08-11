@@ -156,4 +156,7 @@ export const api = {
   quota: () => call('/v1/me/quota', 'GET'),
   myVideos: () => call('/v1/me/videos', 'GET'),
   deleteMe: () => call('/v1/me', 'DELETE'),
+  // Fire-and-forget: the page telling the server something is broken on its
+  // side. Never worth surfacing a failure of this to anyone.
+  telemetry: (payload) => call('/v1/telemetry', 'POST', payload),
 };

@@ -1,6 +1,7 @@
 import { config } from './config.js';
 import { summarizeYouTubeVideoStreaming, summarizeYouTubeVideo, MODEL } from './gemini.js';
 import { resolveDuration, DurationUnavailable } from './youtube.js';
+import { reportCritical, CRITICAL } from './digest.js';
 import {
   readStats,
   readQuota,
@@ -60,6 +61,9 @@ export async function resolveDurationOrRefuse(videoId, claimedSeconds) {
   } catch (err) {
     if (err instanceof DurationUnavailable) {
       console.error('[yts:api] duration lookup failed for %s: %s', videoId, err.message);
+      // Nobody can summarise a video nobody has done before while this is
+      // broken, which is the service half-down rather than one bad request.
+      reportCritical(CRITICAL.YOUTUBE, `${videoId}: ${err.message}`);
       throw new SummariseError(
         'DURATION_LOOKUP_FAILED',
         'Could not check how long that video is just now. Please try again shortly.'
@@ -206,11 +210,21 @@ export async function summarise({ videoId, auth, durationSeconds: claimedSeconds
         '[yts:api] streaming failed (%s), falling back to blocking call',
         streamErr.message
       );
-      result = await summarizeYouTubeVideo({
-        apiKey: config.geminiApiKey,
-        videoUrl,
-        durationSeconds,
-      });
+      try {
+        result = await summarizeYouTubeVideo({
+          apiKey: config.geminiApiKey,
+          videoUrl,
+          durationSeconds,
+        });
+      } catch (blockingErr) {
+        // Both paths failed, so this is not a flaky stream - no summary can be
+        // generated at all right now.
+        reportCritical(
+          CRITICAL.GEMINI,
+          `${videoId}: streaming "${streamErr.message}", blocking "${blockingErr.message}"`
+        );
+        throw blockingErr;
+      }
     }
 
     // Record the spend before anything that could fail. An unlogged paid call

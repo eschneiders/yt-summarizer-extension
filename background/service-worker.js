@@ -159,6 +159,19 @@ const HANDLERS = {
     return { ok: true };
   },
 
+  // The content script reporting that YouTube's markup no longer matches our
+  // selectors. Proxied through here because content scripts cannot reach the
+  // service directly, and swallowed on failure - a broken extension reporting
+  // that it is broken must not also throw.
+  async YTS_TELEMETRY(message) {
+    await api.telemetry({
+      kind: message.kind,
+      surface: message.surface,
+      detail: message.detail,
+    });
+    return { ok: true };
+  },
+
   async YTS_OPEN_OPTIONS() {
     await chrome.runtime.openOptionsPage();
     return { ok: true };

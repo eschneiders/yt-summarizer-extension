@@ -65,8 +65,8 @@ server/               Node, one dependency (`pg`)
   src/db.js           all SQL
   src/schema.sql      applied idempotently at boot
   src/notify.js       one Telegram sendMessage call, everything else calls this
-  src/digest.js       daily report + spend-cap alerts, polled every 5 min
-  test/api.test.mjs   102 assertions against a live server
+  src/digest.js       daily report, spend alerts, critical-failure alerts
+  test/api.test.mjs   120 assertions against a live server
 ```
 
 Content scripts load in manifest order and share one `window.__ytSummarizer`
@@ -100,7 +100,7 @@ the click handler resolves the surface from that stamp, not from the pathname.
 **Server** (needs Postgres):
 ```bash
 createdb yts_test && cd server && npm install && npm start
-cd server && npm test      # 102 assertions, in another terminal
+cd server && npm test      # 120 assertions, in another terminal
 ```
 
 **Extension**: `chrome://extensions` → Developer mode → Load unpacked. The ID
@@ -199,6 +199,33 @@ Cost: ~$5/mo Railway, $0 Neon free tier, $0 Pages, plus a few dollars of Gemini.
   and recycles card nodes.
 - CSS uses `max-height` + `overflow:hidden` for the collapse animation, so
   content past `max-height` is **silently clipped with no scrollbar**.
+
+## Knowing when it breaks
+
+`incidents` table, one row per (UTC day, kind), with a count and the most recent
+message. **One Telegram alert per day, across all kinds** — a second failure the
+same day is counted but stays quiet, because one is already enough to mean "go
+and look". The morning report lists everything that broke, with detail, and is
+meant to be pasted straight into a coding agent.
+
+What counts as critical (`CRITICAL` in `digest.js`): Gemini failing on **both**
+the streaming and blocking paths, a YouTube duration lookup failing, Google
+refusing the sign-in code exchange, an unhandled error on the summarise path,
+and **the extension reporting that YouTube's layout changed**.
+
+That last one is the only way this is knowable. Every selector in `surfaces.js`
+is a bet on YouTube's markup; when it stops paying, nothing errors — the
+extension just renders no buttons and looks uninstalled, while the server sees
+perfectly healthy traffic right up until nobody sends any. So `content.js`
+watches for "YouTube has clearly rendered videos and our selector matched none
+of them", three sweeps running, and posts once per surface per page load to
+`POST /v1/telemetry`.
+
+To hand a problem to a coding agent:
+
+```sql
+SELECT day, kind, count, sample FROM incidents ORDER BY last_at DESC LIMIT 20;
+```
 
 ## Guards on the money path, outermost first
 

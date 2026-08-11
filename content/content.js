@@ -365,8 +365,63 @@
     }
   };
 
+  // ---------- has YouTube moved the furniture? ----------
+  //
+  // Every selector in surfaces.js is a bet on YouTube's markup, and YouTube
+  // rewrites its markup without telling anyone. When that bet stops paying, the
+  // extension does not error - it simply stops finding cards, renders no
+  // buttons, and looks uninstalled. From the server every remaining request
+  // still looks perfectly healthy right up until nobody sends any.
+  //
+  // So the page says so itself. The signal is deliberately narrow: not "we
+  // found no cards", which is also true of an empty feed and of a page that has
+  // not finished loading, but "YouTube has clearly rendered videos and none of
+  // them match anything we know how to find".
+  const ZERO_SWEEPS_BEFORE_REPORTING = 3;
+  const layoutWatch = { misses: Object.create(null), reported: Object.create(null) };
+
+  function noteSweepResult(surface, cardCount) {
+    const name = surface.name || 'unknown';
+    if (cardCount > 0) {
+      layoutWatch.misses[name] = 0;
+      return;
+    }
+    if (layoutWatch.reported[name]) return;
+
+    // YouTube's own thumbnails, by any of the tags it has used. If none of
+    // these exist either, the feed is genuinely empty or still loading, and
+    // that is not news.
+    const youtubeRenderedSomething = document.querySelector(
+      'ytd-thumbnail, ytd-rich-item-renderer, a#thumbnail, yt-thumbnail-view-model'
+    );
+    if (!youtubeRenderedSomething) {
+      layoutWatch.misses[name] = 0;
+      return;
+    }
+
+    layoutWatch.misses[name] = (layoutWatch.misses[name] || 0) + 1;
+    if (layoutWatch.misses[name] < ZERO_SWEEPS_BEFORE_REPORTING) return;
+
+    // Once per surface per page load. This is a doorbell, not a heartbeat.
+    layoutWatch.reported[name] = true;
+    console.error(
+      '[yts] %s: YouTube has rendered videos but "%s" matched none of them - the layout has probably changed',
+      name,
+      surface.cardSelector
+    );
+    sendMessage({
+      type: 'YTS_TELEMETRY',
+      kind: 'selectors',
+      surface: name,
+      detail: `cardSelector "${surface.cardSelector}" matched 0 of YouTube's rendered videos at ${location.pathname}`,
+    }).catch(() => {
+      // Reporting a problem must never become a second problem.
+    });
+  }
+
   function processGrid(surface) {
     const cards = document.querySelectorAll(surface.cardSelector);
+    noteSweepResult(surface, cards.length);
     let created = 0;
     cards.forEach((card) => {
       if (ns.syncCardButton(card, surface)) created += 1;

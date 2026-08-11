@@ -134,6 +134,25 @@ CREATE TABLE IF NOT EXISTS gemini_calls (
   created_at       BIGINT NOT NULL
 );
 
+-- Things that went wrong badly enough to be worth a person's attention. One row
+-- per (day, kind): a failure that repeats all day is one row with a count, not
+-- five hundred rows, because the second occurrence tells you nothing the first
+-- did not. `sample` keeps the most recent message - the thing you actually need
+-- in order to fix it.
+--
+-- Deliberately not a log. Anything routine (a refused quota, a video over the
+-- length cap, someone signing in wrong) belongs in stdout and nowhere near
+-- here. This table exists so that "is anything broken" is one cheap query.
+CREATE TABLE IF NOT EXISTS incidents (
+  day      TEXT   NOT NULL,
+  kind     TEXT   NOT NULL,
+  count    INTEGER NOT NULL DEFAULT 1,
+  sample   TEXT   NOT NULL,
+  first_at BIGINT NOT NULL,
+  last_at  BIGINT NOT NULL,
+  PRIMARY KEY (day, kind)
+);
+
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions (user_id);
 CREATE INDEX IF NOT EXISTS idx_votes_video   ON votes (video_id, revision);
 CREATE INDEX IF NOT EXISTS idx_views_video   ON views (video_id);
