@@ -14,6 +14,11 @@ window.__ytSummarizer = window.__ytSummarizer || {};
   // free, so the button advertises that rather than looking like a fresh run.
   ns.summarisedIds = ns.summarisedIds || new Set();
 
+  // Above this, the panel shows "1000+" rather than an exact figure. A number
+  // nobody is rationing against is noise, and an unlimited plan has no honest
+  // exact figure to show at all.
+  ns.QUOTA_DISPLAY_CAP = 1000;
+
   const LABEL_IDLE = 'Summarise';
   const LABEL_DONE = 'Summarised';
 

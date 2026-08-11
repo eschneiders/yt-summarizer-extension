@@ -10,8 +10,11 @@ function setStatus(text) {
   if (text) setTimeout(() => (statusEl.textContent = ''), 2500);
 }
 
-const minutes = (seconds) =>
-  Number.isFinite(seconds) ? `${Math.round(seconds / 60)} min` : 'unlimited';
+const minutes = (seconds) => {
+  if (!Number.isFinite(seconds)) return 'unlimited';
+  const m = Math.round(seconds / 60);
+  return m > 1000 ? '1000+ min' : `${m} min`;
+};
 
 const baseUrl = () => serviceInput.value.trim().replace(/\/+$/, '');
 

@@ -33,11 +33,17 @@ async function paintBadge(quota) {
   const limit = Math.round(quota.limitSeconds / 60);
   const low = quota.remainingSeconds <= quota.limitSeconds * BADGE_LOW_FRACTION;
 
-  await chrome.action.setBadgeText({ text: String(left) });
+  // A badge fits about four characters, so a large or unlimited allowance gets
+  // the short form rather than being silently truncated to something wrong.
+  const text = left > 1000 ? '1k+' : String(left);
+
+  await chrome.action.setBadgeText({ text });
   await chrome.action.setBadgeBackgroundColor({ color: low ? '#c2410c' : '#3f3f46' });
   await chrome.action.setBadgeTextColor({ color: '#ffffff' });
   await chrome.action.setTitle({
-    title: `YouTube Feed Summariser — ${left} of ${limit} minutes left this week`,
+    title: Number.isFinite(limit)
+      ? `YouTube Feed Summariser — ${left} of ${limit} minutes left this week`
+      : `YouTube Feed Summariser — ${left} minutes used this week, no limit`,
   });
 }
 

@@ -245,7 +245,11 @@ window.__ytSummarizer = window.__ytSummarizer || {};
 
   function buildQuota(quota) {
     const left = Math.round(quota.remainingSeconds / 60);
-    const node = h('div', 'yts-quota', `${left} min left`);
+    // Past a thousand the exact figure stops being information - nobody rations
+    // against 3,860. "1000+" says the only thing that matters, which is that
+    // there is no need to think about it.
+    const shown = left > ns.QUOTA_DISPLAY_CAP ? `${ns.QUOTA_DISPLAY_CAP}+` : String(left);
+    const node = h('div', 'yts-quota', `${shown} min left`);
     node.title =
       `${left} of ${Math.round(quota.limitSeconds / 60)} minutes left this week` +
       (quota.projected ? ', counting this one' : '') +
