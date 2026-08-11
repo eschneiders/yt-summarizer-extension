@@ -233,9 +233,11 @@ export async function summarise({ videoId, auth, durationSeconds: claimedSeconds
   }
 
   if (!acquireSlot(userId)) {
+    // The client retries this rather than showing it, so it reads as patience
+    // rather than a refusal on the rare occasion it does surface.
     throw new SummariseError(
       'TOO_MANY_REQUESTS',
-      'You already have a summary being generated. Wait for it to finish.'
+      'Still finishing your other summaries — this one is queued.'
     );
   }
 

@@ -186,3 +186,15 @@ button.ghost {
 #advanced label {
   margin-top: 12px;
 }
+
+.legal {
+  margin-top: 18px;
+}
+
+.legal a {
+  color: var(--muted);
+}
+
+.legal a:hover {
+  color: var(--fg);
+}

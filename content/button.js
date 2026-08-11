@@ -86,6 +86,9 @@ window.__ytSummarizer = window.__ytSummarizer || {};
 
   ns.setButtonLabel = function (btn, label) {
     btn.innerHTML = ICON_SVG + `<span>${label}</span>`;
+    // The label can be wider than a thumbnail and is allowed to truncate, so
+    // the full text has to survive somewhere.
+    btn.title = label;
   };
 
   // The resting label depends on whether this video has been summarised

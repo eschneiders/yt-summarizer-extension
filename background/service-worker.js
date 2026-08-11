@@ -199,6 +199,17 @@ chrome.runtime.onConnect.addListener((port) => {
       }
     };
 
+    // A generation runs for tens of seconds, and this worker is killed after
+    // thirty without activity. Deltas usually count as activity - but there is
+    // a long silence before the first token while the model thinks, and the
+    // blocking fallback produces no deltas at all. When the worker dies the
+    // port disconnects and the page reports a failure for a summary that is
+    // still being written and will be stored regardless. So hold the worker up
+    // for as long as the request is in flight.
+    const keepAlive = setInterval(() => {
+      chrome.runtime.getPlatformInfo().catch(() => {});
+    }, 20000);
+
     try {
       const result = await summariseStream(msg.videoId, msg.durationSeconds || 0, (markdown) =>
         post({ type: 'delta', text: markdown })
@@ -222,6 +233,8 @@ chrome.runtime.onConnect.addListener((port) => {
     } catch (err) {
       console.error('[yts:sw] stream handler failed', err);
       post({ type: 'error', code: 'INTERNAL', error: err.message });
+    } finally {
+      clearInterval(keepAlive);
     }
   });
 });

@@ -22,6 +22,18 @@
   cursor: pointer;
   line-height: 1;
   transition: background-color 0.15s ease;
+  /* "Sign in for free summaries" is nearly three times the width of
+     "Summarise", and this sits absolutely positioned over a thumbnail that is
+     only ~168px wide in the related rail. Without a ceiling it runs off the
+     card; with one it truncates and the full text stays in the tooltip. */
+  max-width: calc(100% - 16px);
+  overflow: hidden;
+}
+
+.yts-summarize-btn > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .yts-summarize-btn:hover {

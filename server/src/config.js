@@ -83,9 +83,16 @@ export const config = {
   // one stray three-hour podcast is the expensive mistake worth blocking.
   maxVideoSeconds: num(process.env.YTS_MAX_VIDEO_SECONDS, 3600),
 
-  // One generation in flight per user. Stops a loop in a client - or an
-  // impatient person clicking ten cards - turning into ten paid calls.
-  maxConcurrentPerUser: num(process.env.YTS_MAX_CONCURRENT_PER_USER, 1),
+  // Generations in flight per user. One was too strict: clicking a second card
+  // while the first is still thinking is normal behaviour, not abuse, and it
+  // met a refusal. Three still walls off a client stuck in a loop, which is
+  // what this actually defends against - and the spend cap sits behind it
+  // either way.
+  //
+  // Note the alternative, cancelling the first, would be worse than useless:
+  // that call is already being paid for, and it is allowed to finish precisely
+  // so the summary gets stored and everyone after gets it free.
+  maxConcurrentPerUser: num(process.env.YTS_MAX_CONCURRENT_PER_USER, 3),
 };
 
 // Checked before anything connects to anything. A misconfigured deploy should

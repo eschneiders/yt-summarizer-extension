@@ -30,15 +30,97 @@
   // observe, and for observers whose target YouTube swapped out from under us.
   const SWEEP_MS = 2000;
 
-  // Streaming path: deltas arrive over a Port and render as markdown prefixes,
-  // so the panel fills in as text lands.
-  function summarizeStreaming(request, onDelta) {
+  // How long to keep waiting on a summary whose worker went away mid-flight,
+  // and how often to ask again. Generation takes tens of seconds, so this has
+  // to outlast a slow one rather than giving up first.
+  const RECONNECT_DELAY_MS = 4000;
+
+  // Seventy seconds of complete silence - no deltas, no answer, nothing - and
+  // we stop waiting. Note that stopping waiting is all it does: the generation
+  // carries on server-side and the summary still gets stored, because that call
+  // is already paid for and finishing it is the whole point. There is nothing
+  // to cancel that would not be pure waste, so the message says what is true -
+  // it is still being written, come back in a moment - rather than claiming a
+  // failure that has not happened.
+  const SILENCE_LIMIT_MS = 70000;
+
+  /**
+   * Streaming path: deltas arrive over a Port and render as markdown prefixes,
+   * so the panel fills in as text lands.
+   *
+   * A disconnect is NOT a failure. The service worker can be evicted mid-
+   * generation, which drops the port - but the server carries on writing the
+   * summary and stores it, deliberately, so the next reader gets it free. That
+   * next reader may as well be this one: reconnecting either finds the finished
+   * summary waiting or is told the generation is still running, and both are
+   * worth another few seconds of patience. Reporting "could not summarise" for
+   * a summary that is being written is simply wrong.
+   */
+  async function summarizeStreaming(request, onDelta) {
+    const deadline = Date.now() + SILENCE_LIMIT_MS;
+
+    for (let attempt = 0; ; attempt++) {
+      const result = await streamOnce(request, onDelta);
+
+      const worthRetrying =
+        result &&
+        !result.ok &&
+        (result.code === 'DISCONNECTED' || result.code === 'TOO_MANY_REQUESTS');
+
+      if (!worthRetrying) return result;
+
+      if (Date.now() + RECONNECT_DELAY_MS >= deadline) {
+        return {
+          ok: false,
+          code: 'STILL_RUNNING',
+          error:
+            'This one is taking longer than usual. It is still being written — ' +
+            'open it again in a moment and it should be here.',
+        };
+      }
+
+      console.warn(
+        '[yts] %s for %s - still being generated, asking again in %ds (attempt %d)',
+        result.code,
+        request.videoId,
+        RECONNECT_DELAY_MS / 1000,
+        attempt + 1
+      );
+      await new Promise((r) => setTimeout(r, RECONNECT_DELAY_MS));
+    }
+  }
+
+  function streamOnce(request, onDelta) {
     return new Promise((resolve) => {
       let settled = false;
+      let silence;
       const finish = (value) => {
         if (settled) return;
         settled = true;
+        clearTimeout(silence);
         resolve(value);
+      };
+
+      // Rearmed in full by every message, so a summary that is actively
+      // streaming is never cut off however long it runs - text arriving is the
+      // opposite of the problem. What this catches is silence.
+      const armSilenceTimer = () => {
+        clearTimeout(silence);
+        silence = setTimeout(() => {
+          console.warn('[yts] no response for %s in %ds', request.videoId, SILENCE_LIMIT_MS / 1000);
+          finish({
+            ok: false,
+            code: 'STILL_RUNNING',
+            error:
+              'This one is taking longer than usual. It is still being written — ' +
+              'open it again in a moment and it should be here.',
+          });
+          try {
+            port.disconnect();
+          } catch {
+            // Already gone; the summary carries on server-side regardless.
+          }
+        }, SILENCE_LIMIT_MS);
       };
 
       let port;
@@ -48,8 +130,10 @@
         finish({ ok: false, error: err.message });
         return;
       }
+      armSilenceTimer();
 
       port.onMessage.addListener((msg) => {
+        armSilenceTimer();
         if (msg.type === 'delta') onDelta(msg.text);
         else if (msg.type === 'fallback') {
           console.warn('[yts] streaming unavailable (%s), waiting for full response', msg.reason);
@@ -63,8 +147,14 @@
         }
       });
 
+      // Tagged rather than described, so the retry above can tell this apart
+      // from a refusal the server actually issued.
       port.onDisconnect.addListener(() =>
-        finish({ ok: false, error: 'Connection to the extension closed.' })
+        finish({
+          ok: false,
+          code: 'DISCONNECTED',
+          error: 'Still working on this one…',
+        })
       );
       port.postMessage(request);
     });
@@ -204,13 +294,16 @@
           // which is a settings problem rather than a video problem.
           needsSettings: code === 'NO_SERVICE' || code === 'OFFLINE',
           quota: code === 'QUOTA_EXCEEDED' ? res.quota : null,
-          invitation: wantsAccount,
+          // Neither of these is a failure, so neither gets dressed as one.
+          invitation: wantsAccount || code === 'STILL_RUNNING',
           title:
             code === 'SIGN_IN_TO_GENERATE'
               ? 'Nobody has summarised this one yet'
               : code === 'ANON_LIMIT'
                 ? "That's your free summaries for today"
-                : null,
+                : code === 'STILL_RUNNING'
+                  ? 'Still being written'
+                  : null,
           // Signing in is one click, so offer it here rather than sending
           // someone to the settings page to find it.
           onSignIn: wantsAccount
@@ -235,11 +328,15 @@
           code === 'QUOTA_EXCEEDED' || code === 'ANON_LIMIT'
             ? 'Limit reached'
             : wantsAccount
-              ? 'Sign in'
-              : 'Error'
+              ? 'Sign in for free summaries'
+              : code === 'STILL_RUNNING'
+                ? 'Still working…'
+                : 'Error'
         );
         btn.disabled = false;
-        setTimeout(() => ns.resetButtonState(btn), 4000);
+        // Long enough to read the invitation before the button goes back to
+        // "Summarise" - the old four seconds was tuned for the word "Error".
+        setTimeout(() => ns.resetButtonState(btn), wantsAccount ? 10000 : 4000);
         return;
       }
 
