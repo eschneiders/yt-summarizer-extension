@@ -96,6 +96,21 @@
     }
   };
 
+  // The balance as it will be once this video is billed. Returns the last
+  // known figure unchanged when there is nothing to deduct, and null when no
+  // figure is known yet - a projection from nothing would be a guess.
+  ns.projectQuota = function (durationSeconds, alreadyMine) {
+    const base = ns.lastQuota;
+    if (!base) return null;
+    if (alreadyMine || !durationSeconds) return base;
+    return {
+      ...base,
+      usedSeconds: base.usedSeconds + durationSeconds,
+      remainingSeconds: Math.max(0, base.remainingSeconds - durationSeconds),
+      projected: true,
+    };
+  };
+
   ns.recordVote = async function (videoId, vote) {
     try {
       return await sendMessage({ type: 'YTS_VOTE', videoId, vote });
@@ -118,29 +133,40 @@
     }
 
     console.log('[yts] Summarise clicked for video', videoId);
+
+    const meta = surface.readMeta ? surface.readMeta() : ns.readCardMeta(card);
+    const durationSeconds = surface.getDurationSeconds
+      ? surface.getDurationSeconds()
+      : ns.readCardDurationSeconds(card);
+
+    // The server refuses an unmeterable request, so this is a loud failure
+    // rather than a silent free summary - but the console should say which
+    // card it was, because the cause is a YouTube markup change on that
+    // card, not anything the user did.
+    if (!durationSeconds) {
+      console.warn(
+        '[yts] could not read a duration for %s from this card - the duration badge selectors in panel.js need updating. Card:',
+        videoId,
+        card
+      );
+    }
+
+    // Show what the balance is about to be, rather than what it was. A
+    // generation takes tens of seconds, and leaving the old figure up for all
+    // of that reads as the counter being broken - which is exactly how it was
+    // reported. The server's real figure replaces this the moment it lands, so
+    // the projection is only ever on screen while the answer is unknown.
+    //
+    // Nothing is deducted for a video that is already this user's: re-opening
+    // one is free, so the balance genuinely will not move.
+    meta.quota = ns.projectQuota(durationSeconds, ns.summarisedIds.has(videoId));
+
     btn.disabled = true;
     btn.classList.add('yts-loading');
     ns.setButtonLabel(btn, 'Summarising…');
-    ns.panel.openLoading(btn, card, videoId, surface);
+    ns.panel.openLoading(btn, card, videoId, surface, meta);
 
     try {
-      const meta = surface.readMeta ? surface.readMeta() : ns.readCardMeta(card);
-      const durationSeconds = surface.getDurationSeconds
-        ? surface.getDurationSeconds()
-        : ns.readCardDurationSeconds(card);
-
-      // The server refuses an unmeterable request, so this is a loud failure
-      // rather than a silent free summary - but the console should say which
-      // card it was, because the cause is a YouTube markup change on that
-      // card, not anything the user did.
-      if (!durationSeconds) {
-        console.warn(
-          '[yts] could not read a duration for %s from this card - the duration badge selectors in panel.js need updating. Card:',
-          videoId,
-          card
-        );
-      }
-
       // Re-rendering on every delta would thrash layout, so redraw at most a
       // few times a second.
       let lastPaint = 0;

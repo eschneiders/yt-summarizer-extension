@@ -247,8 +247,9 @@ window.__ytSummarizer = window.__ytSummarizer || {};
     const left = Math.round(quota.remainingSeconds / 60);
     const node = h('div', 'yts-quota', `${left} min left`);
     node.title =
-      `${left} of ${Math.round(quota.limitSeconds / 60)} minutes left this week · ` +
-      `resets ${new Date(quota.resetsAt).toLocaleDateString()}`;
+      `${left} of ${Math.round(quota.limitSeconds / 60)} minutes left this week` +
+      (quota.projected ? ', counting this one' : '') +
+      ` · resets ${new Date(quota.resetsAt).toLocaleDateString()}`;
     // Amber near the end, so running out is never a surprise.
     node.classList.toggle(
       'yts-quota-low',
@@ -274,7 +275,9 @@ window.__ytSummarizer = window.__ytSummarizer || {};
     info.appendChild(h('div', 'yts-panel-title', meta.title));
     if (meta.channel) info.appendChild(h('div', 'yts-panel-channel', meta.channel));
 
-    const bits = [`${readingTimeMinutes(summary)} min read`];
+    // No summary yet means no reading time - claiming "1 min read" over a
+    // spinner would be inventing a number.
+    const bits = summary ? [`${readingTimeMinutes(summary)} min read`] : [];
     // Only shown when the service is reachable and someone else has actually
     // been here - "0 others" is noise, and an unreachable service must not
     // silently render as nobody having read it.
@@ -631,7 +634,7 @@ window.__ytSummarizer = window.__ytSummarizer || {};
   // ---------- public API ----------
 
   ns.panel = {
-    openLoading(btn, card, videoId, surface) {
+    openLoading(btn, card, videoId, surface, meta) {
       anchorBtn = btn;
       anchorCard = card;
       anchorVideoId = videoId;
@@ -643,7 +646,12 @@ window.__ytSummarizer = window.__ytSummarizer || {};
       loading.appendChild(h('div', null, 'Gemini is watching the whole video…'));
       const hint = h('div', 'yts-panel-hint', 'Roughly a few seconds per minute of video.');
       loading.appendChild(hint);
-      setContent([loading]);
+
+      // The header goes up straight away rather than only once text arrives:
+      // it carries the title being worked on and the balance this run will
+      // leave you with, both of which are more use during the wait than after
+      // it. `meta` is optional so an older caller still gets a bare spinner.
+      setContent(meta ? [renderHeader(meta, '', videoId), loading] : [loading]);
 
       // A visible clock makes a long wait read as progress rather than a hang.
       const startedAt = Date.now();
