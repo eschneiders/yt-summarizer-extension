@@ -24,6 +24,12 @@ export const config = {
   // every week. Most will not come close.
   weeklyQuotaSeconds: num(process.env.YTS_WEEKLY_QUOTA_MINUTES, 400) * 60,
 
+  // What someone gets before signing in: this many *already-written* summaries
+  // a day, counted per video so re-opening one is free. Generating is never
+  // anonymous, so this allowance only ever hands out things that cost nothing
+  // to serve - which is exactly why it is safe to let it be resettable.
+  anonDailyReads: num(process.env.YTS_ANON_DAILY_READS, 5),
+
   // A summary is re-run when enough readers call it bad. Both conditions have
   // to hold: an absolute floor, so three people cannot bin a summary nobody
   // else has read, and a majority, so a popular summary is not re-run because
@@ -47,6 +53,14 @@ export const config = {
   // The server now pays for every Gemini call, so this key is the one secret
   // that actually costs money if it leaks. Never sent to a client.
   geminiApiKey: process.env.GEMINI_API_KEY || '',
+
+  // YouTube Data API v3, used for one thing: deciding how long a video is
+  // instead of believing the client. Same Google Cloud project as the Gemini
+  // key, different API - enable "YouTube Data API v3" on it. Without this the
+  // server takes the client's word, which is fine on a laptop and wrong the
+  // moment anyone but us can reach the service.
+  youtubeApiKey: process.env.YOUTUBE_API_KEY || '',
+  youtubeTimeoutMs: num(process.env.YTS_YOUTUBE_TIMEOUT_MS, 5000),
 
   // Google sign-in. The client id ships inside the extension and is public by
   // design; the secret is what lets this server exchange an authorisation code
@@ -105,6 +119,11 @@ export function validateConfig() {
       'GEMINI_API_KEY still contains the placeholder text from the setup guide.'
     );
   }
+  if (config.youtubeApiKey && placeholder(config.youtubeApiKey)) {
+    problems.push(
+      'YOUTUBE_API_KEY still contains the placeholder text from the setup guide.'
+    );
+  }
 
   if (problems.length) {
     console.error('\n[yts:api] cannot start - configuration problems:\n');
@@ -116,6 +135,13 @@ export function validateConfig() {
   if (!config.geminiApiKey) {
     console.warn(
       '[yts:api] no GEMINI_API_KEY set - existing summaries will be served, but no new ones can be generated.'
+    );
+  }
+  if (!config.youtubeApiKey) {
+    console.warn(
+      '[yts:api] no YOUTUBE_API_KEY set - video length is taken from the client, so anyone ' +
+        'who can call this API can understate it and summarise long videos for nothing. ' +
+        'Fine locally; set it before the service is reachable by anyone else.'
     );
   }
   if (!config.googleClientId || !config.googleClientSecret) {

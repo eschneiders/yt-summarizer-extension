@@ -1,14 +1,23 @@
 const serviceInput = document.getElementById('service');
 const statusEl = document.getElementById('status');
+const authStatusEl = document.getElementById('authStatus');
 const quotaEl = document.getElementById('quota');
 const accountEl = document.getElementById('account');
 const signInBtn = document.getElementById('signin');
 const signOutBtn = document.getElementById('signout');
 
-function setStatus(text) {
-  statusEl.textContent = text;
-  if (text) setTimeout(() => (statusEl.textContent = ''), 2500);
+// Success fades; failure stays put. A message that erases itself after two and
+// a half seconds is fine for "Saved." and useless for an error someone is meant
+// to act on - especially a sign-in error, which arrives while they are looking
+// at Google's window rather than at this page.
+function write(el, text, { sticky = false } = {}) {
+  el.textContent = text;
+  el.classList.toggle('yts-error-text', sticky && !!text);
+  if (text && !sticky) setTimeout(() => (el.textContent = ''), 2500);
 }
+
+const setStatus = (text, opts) => write(statusEl, text, opts);
+const setAuthStatus = (text, opts) => write(authStatusEl, text, opts);
 
 const minutes = (seconds) => {
   if (!Number.isFinite(seconds)) return 'unlimited';
@@ -28,6 +37,15 @@ function showQuota(q) {
     quotaEl.textContent = '—';
     return;
   }
+  // Signed out this is a count of summaries a day, not minutes of video a week.
+  // Two different things, so they get two different sentences.
+  if (q.anonymous) {
+    const left = Math.max(0, q.limit - q.used);
+    quotaEl.textContent =
+      `${left} of ${q.limit} free summaries left today · ` +
+      'sign in for a weekly allowance and to summarise videos nobody has done yet';
+    return;
+  }
   quotaEl.textContent = q.unlimited
     ? `${minutes(q.usedSeconds)} used this week · no limit on your account`
     : `${minutes(q.usedSeconds)} of ${minutes(q.limitSeconds)} used this week · ` +
@@ -42,8 +60,10 @@ chrome.storage.onChanged.addListener((changes, area) => {
 });
 
 async function refreshAccount() {
+  // The service URL now has a working default, so an empty one means someone
+  // has deliberately cleared it in Advanced.
   if (!baseUrl()) {
-    accountEl.textContent = 'Set a service URL first.';
+    accountEl.textContent = 'No service URL set — see Advanced below.';
     signInBtn.disabled = true;
     return;
   }
@@ -56,8 +76,12 @@ async function refreshAccount() {
   signOutBtn.hidden = !signedIn;
 
   if (!signedIn) {
-    accountEl.textContent = 'Not signed in. Summaries need an account.';
-    quotaEl.textContent = '—';
+    accountEl.textContent =
+      'Not signed in. You can read a few summaries a day that other people have ' +
+      'already generated; signing in is free and lets you summarise anything.';
+    // The badge refresh answers with the anonymous count, which showQuota picks
+    // up through the storage listener.
+    ask('YTS_REFRESH_BADGE');
     return;
   }
 
@@ -86,14 +110,40 @@ document.getElementById('save').addEventListener('click', async () => {
 
 signInBtn.addEventListener('click', async () => {
   signInBtn.disabled = true;
-  setStatus('Opening Google…');
-  const res = await ask('YTS_SIGN_IN');
+  setAuthStatus('Opening Google…');
+
+  // An exception here used to leave the button disabled with the status stuck
+  // on "Opening Google…", which reads exactly like a hang.
+  let res;
+  try {
+    res = await ask('YTS_SIGN_IN');
+  } catch (err) {
+    res = { ok: false, error: `The extension's background worker did not answer: ${err.message}` };
+  }
   signInBtn.disabled = false;
-  // Closing the Google window is a decision, not a failure worth reporting.
-  if (res && res.ok) setStatus('Signed in.');
-  else if (res && !res.cancelled) setStatus(res.error || 'Sign-in failed.');
-  else setStatus('');
-  refreshAccount();
+  console.log('[yts:options] sign-in result:', res);
+
+  if (res && res.ok) {
+    setAuthStatus('Signed in.');
+  } else if (res && res.cancelled) {
+    // Closing the Google window is a decision, not a failure worth reporting.
+    setAuthStatus('');
+  } else if (res) {
+    setAuthStatus(res.error || 'Sign-in failed.', { sticky: true });
+  } else {
+    // No reply at all. In MV3 this is usually the service worker being torn
+    // down while Google's window was open - the sign-in itself may well have
+    // succeeded, so say what is actually known rather than "failed".
+    // refreshAccount() below reads the stored session and settles it either way.
+    setAuthStatus(
+      'Lost contact with the extension while Google was open. Checking whether it worked…',
+      { sticky: true }
+    );
+  }
+
+  await refreshAccount();
+  // If the session did land, the line above is stale and alarming - clear it.
+  if (!res && (await ask('YTS_AUTH_STATE'))?.signedIn) setAuthStatus('Signed in.');
 });
 
 signOutBtn.addEventListener('click', async () => {

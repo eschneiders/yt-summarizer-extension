@@ -32,6 +32,10 @@ Consequences that shaped the design, and shouldn't be undone:
 - **Users are never told whether a summary was freshly generated or served from
   the store.** It's an implementation detail; the only thing they should notice
   is that most summaries appear instantly.
+- **Signed out, you get 5 already-written summaries a day and cannot generate.**
+  The same rule stated from the cost side: reading is free to serve, so it can
+  be given away to someone with no account; generating is not, so it cannot.
+  See "The anonymous tier" below.
 
 ---
 
@@ -49,17 +53,18 @@ content/
   panel.js            markdown renderer, panel placement, duration scraping
   content.js          entry point, SPA nav, MutationObserver, click handler
   content.css         all classes yts- prefixed
-options/              service URL, sign in/out, quota, delete my data
+options/              sign in/out, allowance, delete my data (URL under Advanced)
 icons/                generated PNGs (16/32/48/128)
 docs/                 the public website — GitHub Pages serves this folder
 server/               Node, one dependency (`pg`)
   src/index.js        node:http router, CORS, SSE, auth gate, rate limit
   src/summarise.js    THE ONLY PATH THAT SPENDS MONEY — all guards live here
   src/gemini.js       Gemini call + prompt + cost estimation
+  src/youtube.js      authoritative video length, YouTube Data API + row cache
   src/auth.js         Google code exchange, sessions, salted user hashing
   src/db.js           all SQL
   src/schema.sql      applied idempotently at boot
-  test/api.test.mjs   71 assertions against a live server
+  test/api.test.mjs   108 assertions against a live server
 ```
 
 Content scripts load in manifest order and share one `window.__ytSummarizer`
@@ -93,7 +98,7 @@ the click handler resolves the surface from that stamp, not from the pathname.
 **Server** (needs Postgres):
 ```bash
 createdb yts_test && cd server && npm install && npm start
-cd server && npm test      # 71 assertions, in another terminal
+cd server && npm test      # 108 assertions, in another terminal
 ```
 
 **Extension**: `chrome://extensions` → Developer mode → Load unpacked. The ID
@@ -128,9 +133,10 @@ Private signing key is at `~/yts-secrets/extension-signing-key.pem`, outside the
 repo. **Losing it means losing the extension ID.**
 
 Railway environment: `DATABASE_URL`, `YTS_DATABASE_SSL=true`, `GEMINI_API_KEY`,
-`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `YTS_DAILY_SPEND_CAP_USD=2`,
-`YTS_WEEKLY_QUOTA_MINUTES=400`, `YTS_ALLOWED_ORIGINS=chrome-extension://ejijl…`,
-`PORT=8787`.
+`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `YOUTUBE_API_KEY`,
+`YTS_DAILY_SPEND_CAP_USD=2`, `YTS_WEEKLY_QUOTA_MINUTES=400`,
+`YTS_ANON_DAILY_READS=5`,
+`YTS_ALLOWED_ORIGINS=chrome-extension://ejijl…`, `PORT=8787`.
 
 Cost: ~$5/mo Railway, $0 Neon free tier, $0 Pages, plus a few dollars of Gemini.
 
@@ -186,11 +192,40 @@ Cost: ~$5/mo Railway, $0 Neon free tier, $0 Pages, plus a few dollars of Gemini.
 - CSS uses `max-height` + `overflow:hidden` for the collapse animation, so
   content past `max-height` is **silently clipped with no scrollbar**.
 
+## The anonymous tier
+
+Signed out, the extension mints a random id into `chrome.storage.local` and
+sends it as `X-YTS-Anon`. That buys **5 already-written summaries a day**,
+counted per video so re-opening one is free. It cannot generate anything.
+
+- `serveAnonymous()` in `summarise.js` is a **separate function that shares no
+  machinery with the paid path** — no duration lookup, no quota, no spend cap,
+  no Gemini client. That is the guarantee, not the daily count.
+- The id is **trivially resettable and deliberately not defended**. Resetting it
+  buys more reads of text that already exists, which costs $0 to serve. This was
+  an explicit decision, not an oversight.
+- An anonymous caller is **never told which videos have summaries**: per-video
+  stats 401, and `/v1/me/videos` returns empty so every card reads "Summarise".
+  Finding out is what clicking is for.
+- Two refusals drive sign-up: `SIGN_IN_TO_GENERATE` (nobody has done this one)
+  and `ANON_LIMIT` (five used today). Both render as an *invitation* with a
+  sign-in button, not an error, and both retry the summary automatically once
+  sign-in succeeds.
+- Known and accepted: rotating ids allows bulk-scraping the summary corpus.
+
 ## Guards on the money path, outermost first
 
 In `server/src/summarise.js`, in this order and for this reason:
 
+0. **How long is this video?** — asked of the YouTube Data API, not of the
+   caller, and cached on the `videos` row so it is one lookup per video ever
+   (`server/src/youtube.js`). Every guard below is measured in seconds of video,
+   so none of them mean anything if that number is the caller's to choose. Fails
+   closed: no answer, no summary. An outage only affects videos nobody has
+   summarised yet — anything already generated has its length on the row.
 1. **Unknown/zero duration** → refuse. Can't be metered, must not be served.
+   Also catches live streams, which report `P0D`, and deleted or private videos,
+   which YouTube returns nothing for.
 2. **Video length cap** (60 min).
 3. **Weekly quota** — skipped for `plan = 'unlimited'`.
 4. **Existing summary?** → serve it, bill the reader, never call Gemini.
@@ -201,7 +236,9 @@ In `server/src/summarise.js`, in this order and for this reason:
 
 ## Deliberately NOT there
 
-- No user-facing options beyond service URL and sign-in. No model picker.
+- No user-facing options beyond sign in/out and delete-my-data. The service URL
+  has a working default and is folded away under "Advanced" for local dev. No
+  model picker.
 - No local caching in the extension.
 - No archive page.
 - `m.youtube.com` is unsupported by design.
@@ -215,12 +252,12 @@ In `server/src/summarise.js`, in this order and for this reason:
 2. **Chrome Web Store**: $5 fee, unlisted, data disclosures matching the privacy
    policy. Not started. After publishing, check the assigned extension ID — if
    it differs from the pinned one, add the new `chromiumapp.org` redirect URI.
-3. **Server-side duration lookup.** The client currently asserts
-   `durationSeconds` and the allowance is metered against it. Fine while the
-   only client is ours; a hand-written one could claim a 3-hour video is 60
-   seconds. Fix: YouTube Data API v3 `videos.list?part=contentDetails`, 1 unit
-   per call against a 10,000/day free quota, cached on the `videos` row so each
-   video is looked up once ever. **Do this before strangers get the link.**
+3. ~~Server-side duration lookup.~~ **Done** — `server/src/youtube.js`. The one
+   thing left is operational: create the API key. In the same Google Cloud
+   project as the Gemini key, enable **YouTube Data API v3**, make a key
+   restricted to that one API, and set `YOUTUBE_API_KEY` on Railway. **Until
+   that variable is set the server still believes the client**, and says so in
+   its first log lines. **Set it before strangers get the link.**
 4. `YTS_ALLOWED_ORIGINS` must not be `*` in production.
 5. Store link placeholder in `docs/index.html` (the only remaining TODO there).
 

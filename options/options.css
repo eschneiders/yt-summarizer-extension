@@ -151,3 +151,38 @@ button.ghost {
   color: var(--muted);
   font-size: 13px;
 }
+
+#authStatus {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* A failure that stays on screen has to look like one, not like a hint. */
+.yts-error-text {
+  color: #c5221f;
+  font-weight: 500;
+}
+
+@media (prefers-color-scheme: dark) {
+  .yts-error-text {
+    color: #f28b82;
+  }
+}
+
+/* Advanced is folded away because the service URL has a working default and
+   only a developer pointing at localhost has any reason to open it. */
+#advanced {
+  margin-top: 28px;
+  border-top: 1px solid var(--border);
+  padding-top: 14px;
+}
+
+#advanced summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+#advanced label {
+  margin-top: 12px;
+}

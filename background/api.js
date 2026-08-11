@@ -15,13 +15,32 @@ const TIMEOUT_MS = 4000;
 const COOL_DOWN_MS = 30000;
 let coolDownUntil = 0;
 
-// Every request carries the session token from a Google sign-in. There is no
-// anonymous mode any more: the server pays for generations, so it has to know
-// who is asking, and an identifier the client makes up for itself is not an
-// answer to that.
-async function authHeader() {
+// A signed-in request carries the session token from a Google sign-in. A
+// signed-out one carries an id this extension minted for itself, which buys a
+// handful of already-written summaries a day and cannot generate anything.
+//
+// That id is not an identity and is not defended as one - it can be cleared and
+// re-minted in a second. It does not need to be, because the only thing behind
+// it is text that already exists, and serving that costs nothing. Anything that
+// spends money is behind the session token.
+async function identityHeader() {
   const token = await getSessionToken();
-  return token ? { Authorization: `Bearer ${token}` } : null;
+  if (token) return { Authorization: `Bearer ${token}` };
+  return { 'X-YTS-Anon': await anonId() };
+}
+
+// Minted once, then kept. Lives alongside the session token rather than in
+// sync storage: it is per-browser by design, and a value that followed someone
+// between machines would be a tracking identifier, which this is not.
+async function anonId() {
+  const { anonId: existing } = await chrome.storage.local.get(['anonId']);
+  if (existing) return existing;
+
+  const fresh = Array.from(crypto.getRandomValues(new Uint8Array(16)))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+  await chrome.storage.local.set({ anonId: fresh });
+  return fresh;
 }
 
 async function baseUrl() {
@@ -38,8 +57,7 @@ async function call(path, method, body) {
   if (!base) return null; // local-only mode
   if (Date.now() < coolDownUntil) return null; // service known down, don't wait on it
 
-  const auth = await authHeader();
-  if (!auth) return { status: 401, ok: false, code: 'SIGN_IN_REQUIRED' };
+  const auth = await identityHeader();
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
@@ -83,10 +101,11 @@ export async function summariseStream(videoId, durationSeconds, onDelta) {
     return { ok: false, code: 'NO_SERVICE', error: 'No summariser service configured.' };
   }
 
-  const auth = await authHeader();
-  if (!auth) {
-    return { ok: false, code: 'SIGN_IN_REQUIRED', error: 'Sign in to summarise videos.' };
-  }
+  // No local short-circuit when signed out any more. Whether this video can be
+  // opened anonymously is a question only the server can answer - it depends on
+  // whether anyone has summarised it yet, which is deliberately not something
+  // this extension is told in advance.
+  const auth = await identityHeader();
 
   let res;
   try {

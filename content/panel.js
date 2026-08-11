@@ -697,8 +697,18 @@ window.__ytSummarizer = window.__ytSummarizer || {};
 
     renderError(message, opts) {
       if (!el) return;
-      const box = h('div', 'yts-panel-error');
-      box.appendChild(h('div', 'yts-error-title', 'Could not summarise this video'));
+      // "Sign in and this is yours, free" is an invitation, not a failure, and
+      // dressing it as an error is the fastest way to make someone close the
+      // panel instead of reading it. Same layout, different clothes.
+      const invite = !!(opts && opts.invitation);
+      const box = h('div', invite ? 'yts-panel-error yts-panel-invite' : 'yts-panel-error');
+      box.appendChild(
+        h(
+          'div',
+          'yts-error-title',
+          (opts && opts.title) || 'Could not summarise this video'
+        )
+      );
       box.appendChild(h('div', 'yts-error-msg', message));
 
       // A quota refusal is not an error state, so it gets the one piece of

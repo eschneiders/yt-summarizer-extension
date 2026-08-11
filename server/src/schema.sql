@@ -47,6 +47,24 @@ CREATE TABLE IF NOT EXISTS retired_usage (
   PRIMARY KEY (user_hash, week)
 );
 
+-- Anonymous readers, so someone can try the extension before deciding to hand
+-- over a Google account. The id is minted by the extension and kept in its
+-- local storage, which makes it resettable - clear it and the daily count
+-- starts again. That is a known and accepted trade, because of what it does
+-- and does not unlock: an anonymous request can only be served a summary that
+-- already exists, and serving one of those costs nothing. Generating - the only
+-- thing that spends money - always requires a signed-in account.
+--
+-- One row per (reader, day, video) rather than a counter, so re-opening the
+-- same video on the same day is free rather than spending another read.
+CREATE TABLE IF NOT EXISTS anon_reads (
+  anon_id  TEXT   NOT NULL,
+  day      TEXT   NOT NULL,
+  video_id TEXT   NOT NULL,
+  read_at  BIGINT NOT NULL,
+  PRIMARY KEY (anon_id, day, video_id)
+);
+
 -- Rate limiting in the database rather than in memory, so it holds across a
 -- restart and across more than one instance.
 CREATE TABLE IF NOT EXISTS rate_limits (
@@ -63,8 +81,17 @@ CREATE TABLE IF NOT EXISTS videos (
   -- a revision so the ones that triggered a re-run cannot immediately trigger
   -- the next one. Capped by YTS_MAX_REVISION.
   revision      INTEGER NOT NULL DEFAULT 1,
+  -- The video's real length, from the YouTube Data API, written once and read
+  -- forever after. This is what the weekly allowance and the length cap are
+  -- metered against - the client also sends a duration, but it is only a hint
+  -- for the button label. NULL means nobody has looked it up yet.
+  duration_seconds INTEGER,
   first_seen_at BIGINT  NOT NULL
 );
+
+-- videos predates duration_seconds, so add it to a database that already has
+-- rows. Cheap and idempotent, same as everything else in this file.
+ALTER TABLE videos ADD COLUMN IF NOT EXISTS duration_seconds INTEGER;
 
 CREATE TABLE IF NOT EXISTS views (
   video_id   TEXT   NOT NULL,
@@ -118,6 +145,7 @@ CREATE TABLE IF NOT EXISTS gemini_calls (
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions (user_id);
+CREATE INDEX IF NOT EXISTS idx_anon_reads_day ON anon_reads (anon_id, day);
 CREATE INDEX IF NOT EXISTS idx_votes_video   ON votes (video_id, revision);
 CREATE INDEX IF NOT EXISTS idx_views_video   ON views (video_id);
 -- The spend cap sums this window before every call, so it must be indexed.

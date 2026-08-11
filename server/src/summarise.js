@@ -1,11 +1,14 @@
 import { config } from './config.js';
 import { summarizeYouTubeVideoStreaming, summarizeYouTubeVideo, MODEL } from './gemini.js';
+import { resolveDuration, DurationUnavailable } from './youtube.js';
 import {
   readStats,
   readQuota,
   commitView,
   hasViewed,
   readSummary,
+  readCurrentSummary,
+  commitAnonRead,
   writeSummary,
   logGeminiCall,
   spendSince,
@@ -14,6 +17,10 @@ import {
 // The only path in this service that spends money, so every guard lives here
 // and they are ordered cheapest-first: reject on quota before touching the
 // spend table, and on both before calling Gemini.
+//
+// The one thing ahead of all of them is working out how long the video is,
+// because every guard below is measured in seconds of video and none of them
+// mean anything if that number came from whoever is asking. See youtube.js.
 
 const DAY_MS = 86400000;
 
@@ -44,20 +51,94 @@ export class SummariseError extends Error {
   }
 }
 
+// The authoritative length of a video, or a refusal. Fails closed: if YouTube
+// cannot be asked, nothing is generated, rather than falling back to a number
+// the caller chose. An outage costs new videos only - anything already
+// summarised has its length on the videos row and needs no lookup - so the
+// blast radius of failing closed is exactly the path that spends money.
+export async function resolveDurationOrRefuse(videoId, claimedSeconds) {
+  try {
+    return await resolveDuration(videoId, claimedSeconds);
+  } catch (err) {
+    if (err instanceof DurationUnavailable) {
+      console.error('[yts:api] duration lookup failed for %s: %s', videoId, err.message);
+      throw new SummariseError(
+        'DURATION_LOOKUP_FAILED',
+        'Could not check how long that video is just now. Please try again shortly.'
+      );
+    }
+    throw err;
+  }
+}
+
+// ---------- the anonymous path ----------
+//
+// Deliberately a separate function that shares none of the machinery below.
+// Everything past this point can spend money; this cannot, and the way that is
+// guaranteed is that it never calls any of it. No duration lookup, no quota, no
+// spend cap, no Gemini client - because the only thing it can do is hand back
+// text that is already written and already paid for.
+//
+// What stops this being a hole is not the daily count, which anyone can reset
+// by clearing their browser storage. It is that resetting it buys nothing but
+// more reads of summaries that already exist, and those cost nothing to serve.
+export async function serveAnonymous({ videoId, anonId }) {
+  const existing = await readCurrentSummary(videoId);
+
+  // Nobody has written this one yet, and writing it costs money. This is the
+  // moment the extension asks for an account, so the message has to carry its
+  // own weight - it is the whole pitch.
+  if (!existing) {
+    throw new SummariseError(
+      'SIGN_IN_TO_GENERATE',
+      'Nobody has summarised this video yet. Sign in to generate it — free.'
+    );
+  }
+
+  // Checked after existence, so someone who has run out is told they have run
+  // out only for videos that actually had something to give. It also keeps the
+  // two refusals from being a reliable way to probe what is in the store.
+  const read = await commitAnonRead(anonId, videoId, config.anonDailyReads);
+  if (!read.allowed) {
+    throw new SummariseError(
+      'ANON_LIMIT',
+      `That is your ${config.anonDailyReads} free summaries for today. ` +
+        'Sign in for more — it is still free.',
+      { anon: { used: read.used, limit: config.anonDailyReads, remaining: 0 } }
+    );
+  }
+
+  return {
+    markdown: existing.markdown,
+    model: existing.model,
+    generated: false,
+    anonymous: true,
+    anon: { used: read.used, limit: config.anonDailyReads, remaining: read.remaining },
+    // An anonymous reader has no vote and no view history, and is deliberately
+    // told nothing about how popular a summary is. The client hides the whole
+    // row rather than rendering zeroes that look like real counts.
+    stats: null,
+    quota: null,
+  };
+}
+
 // Resolves what should happen for this (user, video) without spending anything:
 // whether a summary already exists, whether this user has to be billed, and
 // whether they can afford it. Separated out so the SSE handler can report a
 // refusal before opening a stream.
-export async function planSummary(videoId, auth, durationSeconds) {
+export async function planSummary(videoId, auth, claimedSeconds) {
   const { userId } = auth;
+
+  // How long the video is, asked of YouTube rather than of the caller. The
+  // number the client sends is a hint for its own button label; from here on
+  // everything that meters - the allowance, the length cap - uses this one.
+  const durationSeconds = await resolveDurationOrRefuse(videoId, claimedSeconds);
+
   // A duration of zero used to sail straight through: it is under the length
   // cap, it costs nothing against the weekly allowance, and commitView only
   // bills when seconds > 0. So an unknown duration meant a free, uncapped
   // summary of a video of any length. Refuse instead - a request that cannot
   // be metered must not be served.
-  //
-  // Note this still trusts a number the client supplies, which is fine while
-  // the client is ours and wrong the moment it is not. See the README.
   if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
     throw new SummariseError(
       'UNKNOWN_DURATION',
@@ -91,7 +172,7 @@ export async function planSummary(videoId, auth, durationSeconds) {
   }
 
   const existing = await readSummary(videoId, stats.revision);
-  return { stats, quota, needsBilling, existing };
+  return { stats, quota, needsBilling, existing, durationSeconds };
 }
 
 // Refuses if today's spend has already reached the cap. Deliberately checked
@@ -120,9 +201,12 @@ async function assertUnderSpendCap() {
  * for a genuine generation - a summary that already exists arrives whole,
  * because there is nothing to wait for.
  */
-export async function summarise({ videoId, auth, durationSeconds, onDelta }) {
+export async function summarise({ videoId, auth, durationSeconds: claimedSeconds, onDelta }) {
   const { userId } = auth;
-  const intent = await planSummary(videoId, auth, durationSeconds);
+  const intent = await planSummary(videoId, auth, claimedSeconds);
+  // What the client asked with is a hint. What gets billed, capped and sent to
+  // Gemini is what planSummary resolved.
+  const { durationSeconds } = intent;
 
   // Someone has already paid to generate this. Serving it costs nothing, but
   // reading it still comes out of the reader's weekly allowance unless it is

@@ -11,9 +11,11 @@ import {
   deleteUserData,
   hitRateLimit,
   pruneRateLimits,
+  anonReadsToday,
+  pruneAnonReads,
   migrate,
 } from './db.js';
-import { summarise, SummariseError } from './summarise.js';
+import { summarise, serveAnonymous, SummariseError, resolveDurationOrRefuse } from './summarise.js';
 import {
   signInWithGoogle,
   signOut,
@@ -44,6 +46,30 @@ async function identify(req) {
   return resolveSession(token);
 }
 
+// Anonymous readers carry an id the extension minted for itself. It is not an
+// identity and is not treated as one: it can be cleared and re-minted at will,
+// and all it does is count how many already-written summaries have been handed
+// out today. Nothing it unlocks costs anything to serve, which is the only
+// reason a forgeable id is acceptable here.
+const ANON_ID_RE = /^[A-Za-z0-9_-]{16,64}$/;
+
+function identifyAnonymous(req) {
+  const raw = String(req.headers['x-yts-anon'] || '').trim();
+  if (!ANON_ID_RE.test(raw)) return null;
+  return { anonymous: true, anonId: raw, userId: null };
+}
+
+// Every route that writes something owned by a person, or that could spend
+// money, answers with this rather than pretending an anonymous caller is one.
+const NEEDS_ACCOUNT = {
+  status: 401,
+  body: {
+    ok: false,
+    code: 'SIGN_IN_REQUIRED',
+    error: 'Sign in to do that — it is free.',
+  },
+};
+
 // ---------- housekeeping ----------
 //
 // Rate limiting now lives in Postgres (see hitRateLimit) so it holds across a
@@ -51,13 +77,14 @@ async function identify(req) {
 setInterval(() => {
   pruneRateLimits().catch((err) => console.warn('[yts:api] rate-limit prune:', err.message));
   pruneSessions().catch((err) => console.warn('[yts:api] session prune:', err.message));
+  pruneAnonReads().catch((err) => console.warn('[yts:api] anon-read prune:', err.message));
 }, 300000).unref();
 
 // ---------- plumbing ----------
 
 const CORS_METHODS = {
   'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-YTS-Anon',
   'Access-Control-Max-Age': '86400',
 };
 
@@ -122,14 +149,18 @@ async function handleSummariseStream(req, res, cors, auth, videoId, durationSeco
   });
 
   try {
-    const result = await summarise({
-      videoId,
-      auth,
-      durationSeconds,
-      onDelta: (markdown) => {
-        if (!clientGone) send('delta', { markdown });
-      },
-    });
+    // An anonymous caller takes a different function entirely, not a flag
+    // through this one. Nothing it can reach spends money.
+    const result = auth.anonymous
+      ? await serveAnonymous({ videoId, anonId: auth.anonId })
+      : await summarise({
+          videoId,
+          auth,
+          durationSeconds,
+          onDelta: (markdown) => {
+            if (!clientGone) send('delta', { markdown });
+          },
+        });
     send('done', {
       ok: true,
       markdown: result.markdown,
@@ -137,6 +168,7 @@ async function handleSummariseStream(req, res, cors, auth, videoId, durationSeco
       generated: result.generated,
       stats: result.stats,
       quota: result.quota,
+      anon: result.anon || null,
     });
   } catch (err) {
     if (err instanceof SummariseError) {
@@ -181,8 +213,20 @@ async function route(req, url, auth) {
   const parts = url.pathname.split('/').filter(Boolean);
   const { userId } = auth;
 
+  // What an anonymous caller has left today. Shaped differently from a quota on
+  // purpose: it is a count of summaries, not minutes of video, and conflating
+  // the two would put "minutes" on a badge for someone who has no allowance in
+  // minutes at all.
+  const anonState = async () => ({
+    used: await anonReadsToday(auth.anonId),
+    limit: config.anonDailyReads,
+  });
+
   // GET /v1/me
   if (req.method === 'GET' && url.pathname === '/v1/me') {
+    if (auth.anonymous) {
+      return { status: 200, body: { ok: true, anonymous: true, anon: await anonState() } };
+    }
     return {
       status: 200,
       body: {
@@ -195,6 +239,9 @@ async function route(req, url, auth) {
 
   // GET /v1/me/quota
   if (req.method === 'GET' && url.pathname === '/v1/me/quota') {
+    if (auth.anonymous) {
+      return { status: 200, body: { ok: true, anonymous: true, anon: await anonState() } };
+    }
     return { status: 200, body: { ok: true, quota: await readQuota(userId, auth) } };
   }
 
@@ -204,6 +251,10 @@ async function route(req, url, auth) {
   // than queried per card: it is a few thousand 11-character strings at worst,
   // and the alternative is a request every time the feed scrolls.
   if (req.method === 'GET' && url.pathname === '/v1/me/videos') {
+    // An anonymous reader owns nothing, so every card reads "Summarise" - which
+    // is also exactly the behaviour asked for: before signing in, you cannot
+    // tell which videos already have a summary waiting.
+    if (auth.anonymous) return { status: 200, body: { ok: true, videoIds: [] } };
     return { status: 200, body: { ok: true, videoIds: await listViewedVideos(userId) } };
   }
 
@@ -211,6 +262,9 @@ async function route(req, url, auth) {
   // The GDPR erasure route, and the one people skip. Wired to a button in the
   // extension's settings so it is actually reachable, not just documented.
   if (req.method === 'DELETE' && url.pathname === '/v1/me') {
+    // There is no anonymous account to erase: the id lives in the browser, and
+    // clearing it there is the erasure.
+    if (auth.anonymous) return NEEDS_ACCOUNT;
     // The hash is what lets erasure stay honest without handing back a fresh
     // allowance - see deleteUserData.
     const result = await deleteUserData(userId, await hashUserId(userId));
@@ -225,6 +279,12 @@ async function route(req, url, auth) {
       return { status: 400, body: { ok: false, error: 'malformed videoId' } };
     }
 
+    // Everything below is either owned by a person or would tell an anonymous
+    // caller whether a summary exists - `summarisedBy` answers that on its own,
+    // and the whole point of the anonymous experience is that you find out by
+    // clicking, not by reading a counter.
+    if (auth.anonymous) return NEEDS_ACCOUNT;
+
     // Quota rides along with the stats because the client wants both at the
     // same instant - it is deciding whether to spend a summarise on this video.
     if (req.method === 'GET' && parts.length === 3) {
@@ -237,7 +297,30 @@ async function route(req, url, auth) {
 
     if (req.method === 'POST' && parts[3] === 'view' && parts.length === 4) {
       const body = await readBody(req);
-      const durationSeconds = Number(body.durationSeconds) || 0;
+
+      // This route bills the caller's allowance, so it resolves the length the
+      // same way the summarise path does. It is not the lesser hole of the two:
+      // a view recorded for one second makes the video "already paid for", and
+      // the summarise path then skips the quota check entirely for it.
+      let durationSeconds;
+      try {
+        durationSeconds = await resolveDurationOrRefuse(videoId, Number(body.durationSeconds) || 0);
+      } catch (err) {
+        if (err instanceof SummariseError) {
+          return { status: 503, body: { ok: false, code: err.code, error: err.message } };
+        }
+        throw err;
+      }
+      if (!durationSeconds) {
+        return {
+          status: 400,
+          body: {
+            ok: false,
+            code: 'UNKNOWN_DURATION',
+            error: 'Could not work out how long that video is.',
+          },
+        };
+      }
 
       // Checked here rather than trusting the client's pre-flight check: the
       // pre-check exists to give a good error message, this is the rule.
@@ -344,7 +427,9 @@ const server = createServer(async (req, res) => {
     return;
   }
 
-  const auth = await identify(req);
+  // Signed in if possible, anonymous if the caller brought an id, rejected if
+  // neither - an anonymous allowance has to hang off something countable.
+  const auth = (await identify(req)) || identifyAnonymous(req);
   if (!auth) {
     send(res, 401, { ok: false, code: 'SIGN_IN_REQUIRED', error: 'Sign in to continue.' }, cors);
     return;
@@ -356,7 +441,10 @@ const server = createServer(async (req, res) => {
     return;
   }
 
-  if (await hitRateLimit(auth.userId, config.rateLimitPerMinute)) {
+  // Anonymous callers are rate limited under their own id, which is forgeable -
+  // so this is a brake on a stuck client, not a defence. The defence is that
+  // there is nothing behind it worth attacking.
+  if (await hitRateLimit(auth.userId || `anon:${auth.anonId}`, config.rateLimitPerMinute)) {
     send(res, 429, { ok: false, code: 'RATE_LIMITED', error: 'too many requests' }, cors);
     return;
   }

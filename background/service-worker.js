@@ -29,6 +29,22 @@ async function paintBadge(quota) {
     return;
   }
 
+  // Signed out, the number on the badge is summaries left today, not minutes.
+  // Deliberately not dressed up as an allowance: it is a taste, and the title
+  // is where the invitation to sign in belongs.
+  if (quota.anonymous) {
+    const left = Math.max(0, quota.limit - quota.used);
+    await chrome.action.setBadgeText({ text: String(left) });
+    await chrome.action.setBadgeBackgroundColor({ color: left === 0 ? '#c2410c' : '#3f3f46' });
+    await chrome.action.setBadgeTextColor({ color: '#ffffff' });
+    await chrome.action.setTitle({
+      title:
+        `YouTube Feed Summariser — ${left} of ${quota.limit} free summaries left today. ` +
+        'Sign in for a weekly allowance and to summarise new videos.',
+    });
+    return;
+  }
+
   const left = Math.round(quota.remainingSeconds / 60);
   const limit = Math.round(quota.limitSeconds / 60);
   const low = quota.remainingSeconds <= quota.limitSeconds * BADGE_LOW_FRACTION;
@@ -58,13 +74,37 @@ async function rememberQuota(quota) {
 
 async function refreshBadge() {
   const res = await api.quota();
-  await rememberQuota(res && res.ok ? res.quota : null);
+  if (!res || !res.ok) return rememberQuota(null);
+  // Signed out the server answers with a daily read count instead of a weekly
+  // allowance. Tagged rather than reshaped, so nothing downstream mistakes one
+  // for the other.
+  await rememberQuota(res.anonymous ? { anonymous: true, ...res.anon } : res.quota);
 }
+
+// Where summaries come from unless someone deliberately points this elsewhere.
+// It used to be unset on a fresh install, which meant the settings page opened
+// with an empty box, the sign-in button disabled, and no way for anyone but the
+// author to know what to type. A default is not a preference - it is the
+// difference between an extension that works when installed and one that does
+// not.
+const DEFAULT_SERVICE_URL = 'https://yt-summarizer-extension-production.up.railway.app';
 
 // MV3 evicts the worker when idle, but badge text is browser state and
 // survives that. These cover the cases where it would otherwise be stale or
 // blank: a fresh install, a browser restart, and a changed service URL.
-chrome.runtime.onInstalled.addListener(() => refreshBadge());
+chrome.runtime.onInstalled.addListener(async (details) => {
+  // Only ever fills a blank. Anyone pointing at localhost for development keeps
+  // pointing at localhost across an update.
+  const { serviceUrl } = await chrome.storage.local.get(['serviceUrl']);
+  if (!serviceUrl) await chrome.storage.local.set({ serviceUrl: DEFAULT_SERVICE_URL });
+
+  // Summaries need an account, so the first run has to say so somewhere the
+  // person is actually looking. Only on a genuine install - reopening this on
+  // every background update would be obnoxious.
+  if (details.reason === 'install') await chrome.runtime.openOptionsPage();
+
+  await refreshBadge();
+});
 chrome.runtime.onStartup.addListener(() => refreshBadge());
 
 // No popup, so a click has to do something useful.

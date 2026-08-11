@@ -63,6 +63,21 @@ async function serviceBase() {
  * silent variant: this flow only runs when someone has asked to sign in, and a
  * window appearing unbidden is worse than an error message.
  */
+// An MV3 service worker is torn down after 30 seconds with nothing to do, and
+// an account chooser followed by a consent screen routinely takes longer than
+// that. Awaiting a promise is not "something to do" - but calling an extension
+// API is, and it resets the timer. So ping one while Google's window is open.
+//
+// Without this the worker can be killed mid-flow: the code comes back to
+// nothing, our server never sees a request, and the sign-in appears to do
+// absolutely nothing - no error, no session, no log line anywhere.
+function keepWorkerAlive() {
+  const timer = setInterval(() => {
+    chrome.runtime.getPlatformInfo().catch(() => {});
+  }, 20000);
+  return () => clearInterval(timer);
+}
+
 export async function signIn() {
   const base = await serviceBase();
   if (!base) return { ok: false, error: 'No service URL configured.' };
@@ -85,36 +100,65 @@ export async function signIn() {
       prompt: 'select_account',
     });
 
-  let redirected;
+  // Every step announces itself. When a sign-in goes wrong the useful question
+  // is "how far did it get", and the answer should be readable in the [yts:sw]
+  // console without anyone having to add logging first.
+  console.log('[yts:sw] sign-in: opening Google, redirect %s', uri);
+
+  const stopKeepAlive = keepWorkerAlive();
   try {
-    redirected = await chrome.identity.launchWebAuthFlow({ url: authUrl, interactive: true });
-  } catch (err) {
-    // Closing the window lands here too, which is not an error worth shouting
-    // about - it is someone changing their mind.
-    return { ok: false, cancelled: true, error: err.message };
+    let redirected;
+    try {
+      redirected = await chrome.identity.launchWebAuthFlow({ url: authUrl, interactive: true });
+    } catch (err) {
+      // Closing the window lands here too, which is not an error worth shouting
+      // about - it is someone changing their mind.
+      console.warn('[yts:sw] sign-in: flow did not complete - %s', err.message);
+      return { ok: false, cancelled: true, error: err.message };
+    }
+
+    const params = new URL(redirected).searchParams;
+    if (params.get('error')) {
+      console.error('[yts:sw] sign-in: Google refused - %s', params.get('error'));
+      return { ok: false, error: `Google refused: ${params.get('error')}` };
+    }
+    const code = params.get('code');
+    if (!code) return { ok: false, error: 'Google did not return a sign-in code.' };
+
+    console.log('[yts:sw] sign-in: got a code, exchanging it at %s', base);
+    let res;
+    try {
+      res = await fetch(`${base}/v1/auth/google`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code, codeVerifier: verifier, redirectUri: uri }),
+      });
+    } catch (err) {
+      // The service was unreachable. Distinct from the service saying no, and
+      // it used to surface as an unhandled rejection and no reply at all.
+      console.error('[yts:sw] sign-in: could not reach %s - %s', base, err.message);
+      return { ok: false, error: `Could not reach the service at ${base}: ${err.message}` };
+    }
+
+    const json = await res.json().catch(() => ({}));
+    if (!json.ok) {
+      console.error('[yts:sw] sign-in: service refused - HTTP %d %o', res.status, json);
+      return {
+        ok: false,
+        error: json.error || `Sign-in failed (HTTP ${res.status}).`,
+        code: json.code,
+      };
+    }
+
+    await chrome.storage.local.set({
+      sessionToken: json.sessionToken,
+      authUser: { email: json.user.email, plan: json.user.plan },
+    });
+    console.log('[yts:sw] signed in as %s (%s)', json.user.email, json.user.plan);
+    return { ok: true, user: json.user };
+  } finally {
+    stopKeepAlive();
   }
-
-  const params = new URL(redirected).searchParams;
-  if (params.get('error')) {
-    return { ok: false, error: `Google refused: ${params.get('error')}` };
-  }
-  const code = params.get('code');
-  if (!code) return { ok: false, error: 'Google did not return a sign-in code.' };
-
-  const res = await fetch(`${base}/v1/auth/google`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ code, codeVerifier: verifier, redirectUri: uri }),
-  });
-  const json = await res.json().catch(() => ({}));
-  if (!json.ok) return { ok: false, error: json.error || `Sign-in failed (HTTP ${res.status}).` };
-
-  await chrome.storage.local.set({
-    sessionToken: json.sessionToken,
-    authUser: { email: json.user.email, plan: json.user.plan },
-  });
-  console.log('[yts:sw] signed in as %s (%s)', json.user.email, json.user.plan);
-  return { ok: true, user: json.user };
 }
 
 export async function signOut() {

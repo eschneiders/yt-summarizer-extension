@@ -191,29 +191,53 @@
       if (!res || !res.ok) {
         const code = res && res.code;
         console.error('[yts] summarise failed for %s: %s', videoId, res && res.error);
+
+        // The three ways a signed-out person is asked to sign in. They are the
+        // whole conversion path, so they get an invitation and a button rather
+        // than a red box: nobody has written this one yet, you have used your
+        // free reads for today, or the server wants an account outright.
+        const wantsAccount =
+          code === 'SIGN_IN_REQUIRED' || code === 'SIGN_IN_TO_GENERATE' || code === 'ANON_LIMIT';
+
         ns.panel.renderError((res && res.error) || 'Unknown error', {
           // Both mean "this extension is not pointed at a working service",
           // which is a settings problem rather than a video problem.
           needsSettings: code === 'NO_SERVICE' || code === 'OFFLINE',
           quota: code === 'QUOTA_EXCEEDED' ? res.quota : null,
+          invitation: wantsAccount,
+          title:
+            code === 'SIGN_IN_TO_GENERATE'
+              ? 'Nobody has summarised this one yet'
+              : code === 'ANON_LIMIT'
+                ? "That's your free summaries for today"
+                : null,
           // Signing in is one click, so offer it here rather than sending
           // someone to the settings page to find it.
-          onSignIn:
-            code === 'SIGN_IN_REQUIRED'
-              ? async () => {
-                  const result = await sendMessage({ type: 'YTS_SIGN_IN' });
-                  if (result && result.ok) {
-                    ns.resetButtonState(btn);
-                    ns.handleSummarizeClick(videoId, btn);
-                  }
+          onSignIn: wantsAccount
+            ? async () => {
+                const result = await sendMessage({ type: 'YTS_SIGN_IN' });
+                // Signing in turns "nobody has done this one" into a summary
+                // this person can now generate, so retry it for them rather
+                // than making them find the button again.
+                if (result && result.ok) {
+                  ns.resetButtonState(btn);
+                  ns.handleSummarizeClick(videoId, btn);
                 }
-              : null,
+              }
+            : null,
         });
         btn.classList.remove('yts-loading');
         btn.classList.add('yts-error');
-        // Running out of the weekly allowance is not a failure, so it should
-        // not read like one on the button.
-        ns.setButtonLabel(btn, code === 'QUOTA_EXCEEDED' ? 'Limit reached' : 'Error');
+        // Neither running out of an allowance nor being asked to sign in is a
+        // failure, so neither should read like one on the button.
+        ns.setButtonLabel(
+          btn,
+          code === 'QUOTA_EXCEEDED' || code === 'ANON_LIMIT'
+            ? 'Limit reached'
+            : wantsAccount
+              ? 'Sign in'
+              : 'Error'
+        );
         btn.disabled = false;
         setTimeout(() => ns.resetButtonState(btn), 4000);
         return;

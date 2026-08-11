@@ -526,6 +526,22 @@ html:not([dark]) .yts-vote.yts-voted {
   padding: 6px 2px;
 }
 
+/* "Sign in and this is free" is the pitch, not a failure. Give it a little
+   room and a left rule so it reads as an offer rather than an error that
+   happens to have a button on it. */
+.yts-panel-invite {
+  border-left: 3px solid var(--yt-spec-call-to-action, #3ea6ff);
+  padding-left: 12px;
+}
+
+.yts-panel-invite .yts-error-title {
+  font-size: 1.05em;
+}
+
+.yts-panel-invite .yts-error-msg {
+  opacity: 0.9;
+}
+
 .yts-error-actions {
   display: flex;
   gap: 8px;

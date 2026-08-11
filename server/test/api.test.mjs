@@ -11,7 +11,8 @@
 
 import { randomBytes, createHash } from 'node:crypto';
 
-import { pool, writeSummary, logGeminiCall } from '../src/db.js';
+import { pool, writeSummary, logGeminiCall, writeVideoDuration } from '../src/db.js';
+import { parseIso8601Duration } from '../src/youtube.js';
 
 const BASE = process.env.YTS_TEST_BASE || 'http://localhost:8787';
 const DAY_MS = 86400000;
@@ -172,11 +173,18 @@ section('extension api.js client');
   r = await api.view(video, 900);
   ok('a repeat view is not billed twice', r.quota.usedSeconds === before + 900);
 
-  // Signed out, the client must refuse locally rather than firing a request it
-  // knows will 401.
+  // Signed out, the client no longer refuses locally - it sends an anonymous id
+  // and lets the server decide, because whether a video can be read anonymously
+  // depends on something the extension is deliberately not told: whether anyone
+  // has summarised it yet. Account-only routes still come back 401.
   delete store.sessionToken;
   r = await api.read(video);
-  ok('no session short-circuits to SIGN_IN_REQUIRED', r && r.code === 'SIGN_IN_REQUIRED');
+  ok('signed out, an account-only route is refused by the server', r && r.code === 'SIGN_IN_REQUIRED');
+  ok('and the client minted an anonymous id to ask with', /^[0-9a-f]{32}$/.test(store.anonId || ''));
+
+  const mintedOnce = store.anonId;
+  await api.quota();
+  ok('which it then keeps rather than re-minting', store.anonId === mintedOnce);
   store.sessionToken = user.token;
 
   store.serviceUrl = 'http://localhost:9';
@@ -371,6 +379,202 @@ section('summarise endpoint');
 
   r = await stream(await newUser(), newVideoId(), 600);
   ok('once under the cap again, it reaches the key check', r.events.at(-1).data.code === 'NO_API_KEY');
+}
+
+// ----------------------------------------------------------------- anonymous
+
+section('anonymous readers: existing summaries only, five a day');
+{
+  // The extension mints one of these and keeps it in local storage. Forgeable
+  // by design - see the schema comment for why that is acceptable here.
+  const newAnon = () => randomBytes(16).toString('hex');
+
+  const anonGet = (anonId, path) =>
+    fetch(`${BASE}${path}`, { headers: { 'X-YTS-Anon': anonId } }).then(async (r) => ({
+      status: r.status,
+      ...(await r.json()),
+    }));
+
+  const anonStream = async (anonId, videoId) => {
+    const res = await fetch(`${BASE}/v1/videos/${videoId}/summary`, {
+      method: 'POST',
+      headers: { 'X-YTS-Anon': anonId, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ durationSeconds: 600 }),
+    });
+    const events = [];
+    for (const block of (await res.text()).split('\n\n')) {
+      const e = block.match(/^event: (.+)$/m);
+      const d = block.match(/^data: (.+)$/m);
+      if (e && d) events.push({ event: e[1], data: JSON.parse(d[1]) });
+    }
+    return events.at(-1);
+  };
+
+  let r = await fetch(`${BASE}/v1/me/quota`, { headers: { 'X-YTS-Anon': 'short' } });
+  ok('a malformed anonymous id is not an identity', r.status === 401);
+
+  const anon = newAnon();
+  r = await anonGet(anon, '/v1/me/quota');
+  ok('a well-formed one is accepted', r.ok === true && r.anonymous === true);
+  ok('and reports a daily read count, not minutes', r.anon.limit === 5 && r.anon.used === 0);
+
+  // The headline rule: no summary yet means no generation, ever, anonymously.
+  const fresh = newVideoId();
+  let done = await anonStream(anon, fresh);
+  ok(
+    'an unsummarised video asks for an account instead of generating',
+    done.data.code === 'SIGN_IN_TO_GENERATE',
+    JSON.stringify(done.data)
+  );
+  ok(
+    'and nothing was spent finding that out',
+    (await pool.query('SELECT COUNT(*) AS n FROM gemini_calls WHERE video_id = $1', [fresh]))
+      .rows[0].n === 0
+  );
+  ok(
+    'a refused generation does not cost a daily read',
+    (await anonGet(anon, '/v1/me/quota')).anon.used === 0
+  );
+
+  // Five that do exist.
+  const seeded = [];
+  for (let i = 0; i < 6; i++) {
+    const v = newVideoId();
+    await writeSummary(v, 1, `# Summary ${i}\n\nBody.`, 'test-model');
+    seeded.push(v);
+  }
+
+  done = await anonStream(anon, seeded[0]);
+  ok('an existing summary is served anonymously', done.event === 'done' && done.data.ok);
+  ok('with the text', done.data.markdown.includes('Summary 0'));
+  ok('and it counts as one of the five', done.data.anon.used === 1 && done.data.anon.remaining === 4);
+  ok('and reveals no stats to an anonymous reader', done.data.stats === null);
+
+  done = await anonStream(anon, seeded[0]);
+  ok('re-opening the same video does not cost another', done.data.anon.used === 1);
+
+  for (let i = 1; i < 5; i++) await anonStream(anon, seeded[i]);
+  ok('five used', (await anonGet(anon, '/v1/me/quota')).anon.used === 5);
+
+  done = await anonStream(anon, seeded[5]);
+  ok('the sixth is refused', done.data.code === 'ANON_LIMIT', JSON.stringify(done.data));
+  ok(
+    'but one already read today still opens',
+    (await anonStream(anon, seeded[0])).data.ok === true
+  );
+
+  // Clearing the id gets a fresh five. This is a known, accepted trade: it only
+  // ever hands out text that already exists, which costs nothing to serve.
+  ok(
+    'a fresh id starts over, which is the accepted trade',
+    (await anonStream(newAnon(), seeded[5])).data.ok === true
+  );
+
+  // Nothing an anonymous caller can reach writes anything owned by a person,
+  // and nothing tells them what is in the store.
+  ok(
+    'per-video stats are refused, so existence cannot be probed',
+    (await anonGet(anon, `/v1/videos/${seeded[0]}`)).status === 401
+  );
+  ok('the owned-video list is empty', (await anonGet(anon, '/v1/me/videos')).videoIds.length === 0);
+
+  const anonPost = (path, body) =>
+    fetch(`${BASE}${path}`, {
+      method: 'POST',
+      headers: { 'X-YTS-Anon': anon, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then((r) => r.status);
+
+  ok('voting needs an account', (await anonPost(`/v1/videos/${seeded[0]}/vote`, { vote: 'up' })) === 401);
+  ok('claiming a view needs an account', (await anonPost(`/v1/videos/${seeded[0]}/view`, { durationSeconds: 60 })) === 401);
+
+  const del = await fetch(`${BASE}/v1/me`, { method: 'DELETE', headers: { 'X-YTS-Anon': anon } });
+  ok('there is no anonymous account to erase', del.status === 401);
+
+  // A signed-in user is unaffected by any of this.
+  const user = await newUser();
+  const signedIn = await stream(user, seeded[0], 600);
+  ok(
+    'signing in still bills minutes as before',
+    signedIn.events.at(-1).data.quota.usedSeconds === 600,
+    JSON.stringify(signedIn.events.at(-1).data.quota)
+  );
+}
+
+// ------------------------------------------------------------------ duration
+
+section('how long a video is, is the server\'s to decide');
+{
+  // The parser first, because everything below depends on it reading YouTube's
+  // contentDetails.duration correctly. P0D is what a live stream reports.
+  const cases = [
+    ['PT12M34S', 754],
+    ['PT1H', 3600],
+    ['PT1H2M3S', 3723],
+    ['PT30S', 30],
+    ['P1DT4H', 100800],
+    ['P0D', 0],
+    ['', 0],
+    ['nonsense', 0],
+    [null, 0],
+  ];
+  for (const [text, expected] of cases) {
+    const got = parseIso8601Duration(text);
+    ok(`${JSON.stringify(text)} parses as ${expected}s`, got === expected, `got ${got}`);
+  }
+
+  // These run without a YOUTUBE_API_KEY, which is the point: they exercise the
+  // cached-length path, and a cached length is the one the server trusts. The
+  // API call itself is the uninteresting part - what matters is that a number
+  // the caller sent is never what gets metered once the server knows better.
+  const known = newVideoId();
+  await pool.query(
+    'INSERT INTO videos (video_id, first_seen_at, duration_seconds) VALUES ($1, $2, $3)',
+    [known, Date.now(), 1800]
+  );
+
+  const liar = await newUser();
+  let r = await post(liar, `/v1/videos/${known}/view`, { durationSeconds: 1 });
+  ok(
+    'a view is billed the real length, not the claimed one',
+    r.quota.usedSeconds === 1800,
+    `used=${r.quota?.usedSeconds}`
+  );
+
+  // The exploit this closes end to end: claim a video is a second long, get it
+  // recorded as viewed for almost nothing, and the summarise path then treats
+  // it as already paid for and skips the quota check altogether.
+  const long = newVideoId();
+  await pool.query(
+    'INSERT INTO videos (video_id, first_seen_at, duration_seconds) VALUES ($1, $2, $3)',
+    [long, Date.now(), 7200]
+  );
+  const s = await stream(await newUser(), long, 60);
+  ok(
+    'a long video is refused however short the caller says it is',
+    s.events.at(-1).data.code === 'TOO_LONG',
+    JSON.stringify(s.events.at(-1).data)
+  );
+
+  const broke = await newUser();
+  await burnAllowance(broke);
+  r = await post(broke, `/v1/videos/${known}/view`, { durationSeconds: 1 });
+  ok(
+    'and the allowance cannot be stretched by understating a length',
+    r.status === 429 && r.code === 'QUOTA_EXCEEDED',
+    `status=${r.status} code=${r.code}`
+  );
+
+  // A published video's length does not change, so the first answer stands.
+  await writeVideoDuration(known, 60);
+  const row = await pool.query('SELECT duration_seconds FROM videos WHERE video_id = $1', [known]);
+  ok('a cached length is never revised', row.rows[0].duration_seconds === 1800);
+
+  await writeVideoDuration(newVideoId(), 0);
+  ok(
+    'and a zero is never cached, so an outage does not pin a video as unsummarisable',
+    (await pool.query('SELECT COUNT(*) AS n FROM videos WHERE duration_seconds = 0')).rows[0].n === 0
+  );
 }
 
 // ------------------------------------------------------------ crowd re-runs
