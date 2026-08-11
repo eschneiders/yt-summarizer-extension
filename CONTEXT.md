@@ -64,7 +64,9 @@ server/               Node, one dependency (`pg`)
   src/auth.js         Google code exchange, sessions, salted user hashing
   src/db.js           all SQL
   src/schema.sql      applied idempotently at boot
-  test/api.test.mjs   108 assertions against a live server
+  src/notify.js       one Telegram sendMessage call, everything else calls this
+  src/digest.js       daily report + spend-cap alerts, polled every 5 min
+  test/api.test.mjs   114 assertions against a live server
 ```
 
 Content scripts load in manifest order and share one `window.__ytSummarizer`
@@ -98,7 +100,7 @@ the click handler resolves the surface from that stamp, not from the pathname.
 **Server** (needs Postgres):
 ```bash
 createdb yts_test && cd server && npm install && npm start
-cd server && npm test      # 108 assertions, in another terminal
+cd server && npm test      # 114 assertions, in another terminal
 ```
 
 **Extension**: `chrome://extensions` → Developer mode → Load unpacked. The ID
@@ -135,8 +137,8 @@ repo. **Losing it means losing the extension ID.**
 Railway environment: `DATABASE_URL`, `YTS_DATABASE_SSL=true`, `GEMINI_API_KEY`,
 `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `YOUTUBE_API_KEY`,
 `YTS_DAILY_SPEND_CAP_USD=2`, `YTS_WEEKLY_QUOTA_MINUTES=400`,
-`YTS_ANON_DAILY_READS=5`,
-`YTS_ALLOWED_ORIGINS=chrome-extension://ejijl…`, `PORT=8787`.
+`YTS_ANON_DAILY_READS=5`, `YTS_ALLOWED_ORIGINS=chrome-extension://ejijl…`,
+`TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `PORT=8787`.
 
 Cost: ~$5/mo Railway, $0 Neon free tier, $0 Pages, plus a few dollars of Gemini.
 
@@ -247,8 +249,22 @@ In `server/src/summarise.js`, in this order and for this reason:
 
 ## Still to do before this is public
 
-1. **Daily cost report** — Telegram bot (needs a BotFather token) or email:
-   spend, calls, new users. Not built.
+1. ~~Daily cost report~~ **Done** — `server/src/digest.js` + `notify.js`. Polled
+   every 5 minutes (and once at boot): a report for the UTC day that just
+   ended, sent to Telegram, only if there was any activity (a generation, a
+   sign-up, or a read) — otherwise silent, as asked. A separate, edge-triggered
+   alert fires once when rolling-24h spend crosses 50% of the cap and once more
+   when it hits the cap outright; it does not repeat on every poll while spend
+   sits above a level, and it does not announce spend dropping back down.
+   State (`digest_last_day`, `spend_alert_level`) lives in the `settings`
+   table, so a restart mid-day cannot double-send or lose the threshold.
+   Bot: **@DailySpend_ytsbot**. Needs `TELEGRAM_BOT_TOKEN` (from @BotFather)
+   and `TELEGRAM_CHAT_ID` (message the bot once, then read the id off
+   `GET https://api.telegram.org/bot<token>/getUpdates`) set on Railway.
+   Without both, this is a no-op and says so at startup - same pattern as
+   `YOUTUBE_API_KEY`. Email was asked about and is possible - `notify.js` is
+   the one place any second channel would plug in - but nothing is built for
+   it, since only Telegram was requested.
 2. **Chrome Web Store**: $5 fee, unlisted, data disclosures matching the privacy
    policy. Not started. After publishing, check the assigned extension ID — if
    it differs from the pinned one, add the new `chromiumapp.org` redirect URI.

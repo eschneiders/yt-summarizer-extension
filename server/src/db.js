@@ -465,6 +465,48 @@ export async function writeSummary(videoId, revision, markdown, model) {
   );
 }
 
+// ---------- settings ----------
+//
+// The same key/value table the user-hash salt lives in. Used here to remember
+// state that has to survive a restart but is not worth an env var: which day
+// the digest last covered, and which spend-alert threshold is currently active.
+
+export async function getSetting(key, fallback = null) {
+  const { rows } = await pool.query('SELECT value FROM settings WHERE key = $1', [key]);
+  return rows.length ? rows[0].value : fallback;
+}
+
+export async function setSetting(key, value) {
+  await pool.query(
+    `INSERT INTO settings (key, value) VALUES ($1, $2)
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+    [key, value]
+  );
+}
+
+// ---------- reporting ----------
+
+// Everything the daily digest says, for the half-open interval [startMs, endMs).
+// One query rather than five, because it runs once a day and there is no
+// reason to make five round trips say the same thing one can.
+export async function readDigestStats(startMs, endMs) {
+  const { rows } = await pool.query(
+    `SELECT
+       COALESCE((SELECT SUM(cost_usd) FROM gemini_calls
+                  WHERE created_at >= $1 AND created_at < $2), 0)::float8      AS spend_usd,
+       (SELECT COUNT(*) FROM gemini_calls
+          WHERE created_at >= $1 AND created_at < $2)                         AS generations,
+       (SELECT COUNT(*) FROM users
+          WHERE created_at >= $1 AND created_at < $2)                         AS new_users,
+       (SELECT COUNT(*) FROM views
+          WHERE created_at >= $1 AND created_at < $2)                         AS reads,
+       (SELECT COUNT(DISTINCT user_id) FROM views
+          WHERE created_at >= $1 AND created_at < $2)                         AS active_readers`,
+    [startMs, endMs]
+  );
+  return rows[0];
+}
+
 // ---------- spend ----------
 
 export async function logGeminiCall({

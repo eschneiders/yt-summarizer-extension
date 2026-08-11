@@ -11,8 +11,9 @@
 
 import { randomBytes, createHash } from 'node:crypto';
 
-import { pool, writeSummary, logGeminiCall, writeVideoDuration } from '../src/db.js';
+import { pool, writeSummary, logGeminiCall, writeVideoDuration, getSetting, setSetting, readDigestStats } from '../src/db.js';
 import { parseIso8601Duration } from '../src/youtube.js';
+import { formatDigest, maybeSendDailyDigest, maybeSendSpendAlert } from '../src/digest.js';
 
 const BASE = process.env.YTS_TEST_BASE || 'http://localhost:8787';
 const DAY_MS = 86400000;
@@ -613,6 +614,91 @@ section('downvote threshold, capped at one rewrite');
   await vote(flipper, 'up');
   r = await vote(flipper, null);
   ok('clearing a vote works', r.stats.yourVote === null);
+}
+
+// ------------------------------------------------------------------- digest
+
+section('daily digest and spend alerts');
+{
+  ok(
+    'formats a report from stats alone, no I/O involved',
+    formatDigest('2026-08-11', {
+      spend_usd: 0.183,
+      generations: 23,
+      new_users: 2,
+      reads: 37,
+      active_readers: 14,
+    }) ===
+      'YTS daily report — 2026-08-11 (UTC)\n' +
+        'Spend: $0.18 across 23 generations\n' +
+        'New sign-ups: 2\n' +
+        'Summaries opened: 37 by 14 people'
+  );
+  ok(
+    'singular forms when the count is one',
+    formatDigest('2026-08-11', {
+      spend_usd: 0.01,
+      generations: 1,
+      new_users: 0,
+      reads: 1,
+      active_readers: 1,
+    }).includes('1 generation\n') &&
+      formatDigest('2026-08-11', {
+        spend_usd: 0,
+        generations: 0,
+        new_users: 0,
+        reads: 1,
+        active_readers: 1,
+      }).includes('1 person')
+  );
+
+  // maybeSendDailyDigest/maybeSendSpendAlert both no-op without Telegram
+  // configured, which is exactly the state this test suite runs in - so what
+  // is actually exercised here is that "no token" means "does nothing", not
+  // "throws", and that the settings-based bookkeeping underneath is sound.
+  await setSetting('digest_last_day', 'unset-marker');
+  await maybeSendDailyDigest();
+  ok(
+    'without Telegram configured, nothing is sent and nothing is marked sent',
+    (await getSetting('digest_last_day')) === 'unset-marker'
+  );
+
+  await setSetting('spend_alert_level', '0');
+  await maybeSendSpendAlert();
+  ok(
+    'same for the spend alert - it does not silently mark itself done',
+    (await getSetting('spend_alert_level')) === '0'
+  );
+
+  // readDigestStats itself has no such guard - it is a plain read, and this is
+  // what proves the query counts the right things in the right window.
+  const dayStart = Date.now() - 2 * DAY_MS;
+  const dayEnd = dayStart + DAY_MS;
+  const video = newVideoId();
+  await logGeminiCall({
+    videoId: video,
+    userId: 'digest-test',
+    durationSeconds: 60,
+    cost: { inputTokens: 0, outputTokens: 0, thoughtTokens: 0, totalUsd: 0.05 },
+  });
+  await pool.query('UPDATE gemini_calls SET created_at = $1 WHERE video_id = $2', [
+    dayStart + 1000,
+    video,
+  ]);
+  const before = await readDigestStats(dayStart, dayStart);
+  const inside = await readDigestStats(dayStart, dayEnd);
+  ok(
+    'the window picks up a call placed inside it',
+    inside.generations === before.generations + 1,
+    `before=${before.generations} inside=${inside.generations}`
+  );
+  ok(
+    'and sums its cost',
+    Math.abs(inside.spend_usd - before.spend_usd - 0.05) < 1e-9,
+    `before=${before.spend_usd} inside=${inside.spend_usd}`
+  );
+
+  await pool.query('DELETE FROM gemini_calls WHERE user_id = $1', ['digest-test']);
 }
 
 // ------------------------------------------------------------------ rejects

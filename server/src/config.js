@@ -54,6 +54,13 @@ export const config = {
   // that actually costs money if it leaks. Never sent to a client.
   geminiApiKey: process.env.GEMINI_API_KEY || '',
 
+  // Where the daily report and spend alerts go. Both are optional - unset
+  // either and the server runs exactly as before, just quieter. Get the token
+  // from @BotFather; get the chat id by messaging the bot once and reading it
+  // off GET https://api.telegram.org/bot<token>/getUpdates.
+  telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || '',
+  telegramChatId: process.env.TELEGRAM_CHAT_ID || '',
+
   // YouTube Data API v3, used for one thing: deciding how long a video is
   // instead of believing the client. Same Google Cloud project as the Gemini
   // key, different API - enable "YouTube Data API v3" on it. Without this the
@@ -142,6 +149,11 @@ export function validateConfig() {
   if (!config.geminiApiKey) {
     console.warn(
       '[yts:api] no GEMINI_API_KEY set - existing summaries will be served, but no new ones can be generated.'
+    );
+  }
+  if (!config.telegramBotToken || !config.telegramChatId) {
+    console.warn(
+      '[yts:api] TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID not both set - no daily report, no spend alerts.'
     );
   }
   if (!config.youtubeApiKey) {

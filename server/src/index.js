@@ -16,6 +16,7 @@ import {
   migrate,
 } from './db.js';
 import { summarise, serveAnonymous, SummariseError, resolveDurationOrRefuse } from './summarise.js';
+import { maybeSendDailyDigest, maybeSendSpendAlert } from './digest.js';
 import {
   signInWithGoogle,
   signOut,
@@ -78,6 +79,12 @@ setInterval(() => {
   pruneRateLimits().catch((err) => console.warn('[yts:api] rate-limit prune:', err.message));
   pruneSessions().catch((err) => console.warn('[yts:api] session prune:', err.message));
   pruneAnonReads().catch((err) => console.warn('[yts:api] anon-read prune:', err.message));
+  // Both are cheap no-ops most of the time: the digest only ever does
+  // something once a day, and the alert only on a threshold crossing. Riding
+  // the same five-minute tick as the rest of the housekeeping is one fewer
+  // timer to reason about.
+  maybeSendDailyDigest().catch((err) => console.warn('[yts:api] daily digest:', err.message));
+  maybeSendSpendAlert().catch((err) => console.warn('[yts:api] spend alert:', err.message));
 }, 300000).unref();
 
 // ---------- plumbing ----------
@@ -501,6 +508,12 @@ try {
   );
   process.exit(1);
 }
+
+// Run once at boot rather than waiting up to five minutes for the first tick -
+// a restart during an incident should not delay the cap alert that matters
+// most right then.
+maybeSendDailyDigest().catch((err) => console.warn('[yts:api] daily digest:', err.message));
+maybeSendSpendAlert().catch((err) => console.warn('[yts:api] spend alert:', err.message));
 
 server.listen(config.port, () => {
   console.log(
