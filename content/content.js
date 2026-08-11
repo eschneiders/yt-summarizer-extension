@@ -295,15 +295,26 @@
           needsSettings: code === 'NO_SERVICE' || code === 'OFFLINE',
           quota: code === 'QUOTA_EXCEEDED' ? res.quota : null,
           // Neither of these is a failure, so neither gets dressed as one.
+          // "Could not summarise this video" over an invitation to sign in was
+          // the worst of both: it read as broken, and it buried the one fact
+          // that actually persuades anyone - that this costs nothing.
           invitation: wantsAccount || code === 'STILL_RUNNING',
           title:
             code === 'SIGN_IN_TO_GENERATE'
-              ? 'Nobody has summarised this one yet'
+              ? 'Be the first to summarise this'
               : code === 'ANON_LIMIT'
                 ? "That's your free summaries for today"
                 : code === 'STILL_RUNNING'
                   ? 'Still being written'
-                  : null,
+                  : wantsAccount
+                    ? 'Sign in to summarise — it’s free'
+                    : null,
+          // Said plainly, and in the same words on every one of these, because
+          // "free" is the whole answer to "why should I hand over an account".
+          note: wantsAccount
+            ? 'It’s free — no card, no trial. Signing in is only so one person ' +
+              'cannot use up the whole service.'
+            : null,
           // Signing in is one click, so offer it here rather than sending
           // someone to the settings page to find it.
           onSignIn: wantsAccount
@@ -328,7 +339,7 @@
           code === 'QUOTA_EXCEEDED' || code === 'ANON_LIMIT'
             ? 'Limit reached'
             : wantsAccount
-              ? 'Sign in for free summaries'
+              ? 'Sign in'
               : code === 'STILL_RUNNING'
                 ? 'Still working…'
                 : 'Error'

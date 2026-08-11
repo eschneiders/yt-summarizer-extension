@@ -711,6 +711,12 @@ window.__ytSummarizer = window.__ytSummarizer || {};
       );
       box.appendChild(h('div', 'yts-error-msg', message));
 
+      // The "and it costs nothing" line. Separate from the message so the
+      // server owns what went wrong and the client owns the pitch.
+      if (opts && opts.note) {
+        box.appendChild(h('div', 'yts-error-note', opts.note));
+      }
+
       // A quota refusal is not an error state, so it gets the one piece of
       // information that actually helps: when it comes back.
       if (opts && opts.quota && opts.quota.resetsAt) {

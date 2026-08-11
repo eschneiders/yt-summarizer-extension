@@ -431,7 +431,18 @@ const server = createServer(async (req, res) => {
   // neither - an anonymous allowance has to hang off something countable.
   const auth = (await identify(req)) || identifyAnonymous(req);
   if (!auth) {
-    send(res, 401, { ok: false, code: 'SIGN_IN_REQUIRED', error: 'Sign in to continue.' }, cors);
+    // Read under a "Sign in to summarise — it's free" heading in the panel, so
+    // this is the supporting sentence rather than another instruction.
+    send(
+      res,
+      401,
+      {
+        ok: false,
+        code: 'SIGN_IN_REQUIRED',
+        error: 'Signing in with Google takes a second and lets you summarise any video.',
+      },
+      cors
+    );
     return;
   }
 
