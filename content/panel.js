@@ -202,6 +202,24 @@ window.__ytSummarizer = window.__ytSummarizer || {};
     info.appendChild(h('div', 'yts-panel-meta', bits.join(' · ')));
     header.appendChild(info);
 
+    // The weekly allowance belongs here rather than buried in the settings
+    // page: this is where people are standing when they spend it. Falls back
+    // to the last figure the server gave us so it is present while a summary
+    // is still streaming, instead of popping in at the end.
+    const quota = meta.quota || ns.lastQuota;
+    if (quota) {
+      const left = Math.round(quota.remainingSeconds / 60);
+      const el2 = h('div', 'yts-quota', `${left} min left`);
+      el2.title =
+        `${left} of ${Math.round(quota.limitSeconds / 60)} minutes left this week · ` +
+        `resets ${new Date(quota.resetsAt).toLocaleDateString()}`;
+      // Amber near the end, so running out is never a surprise.
+      if (quota.remainingSeconds <= quota.limitSeconds * 0.15) {
+        el2.classList.add('yts-quota-low');
+      }
+      header.appendChild(el2);
+    }
+
     const close = h('button', 'yts-collapse', '');
     close.type = 'button';
     close.title = 'Collapse (Esc)';

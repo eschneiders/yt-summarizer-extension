@@ -150,6 +150,33 @@ html:not([dark]) .yts-panel-inner {
   border-bottom: 1px solid rgba(255, 255, 255, 0.12);
 }
 
+/* Sits immediately left of the collapse button. It takes over the auto margin
+   that pushes that group right, so the close button keeps its position whether
+   or not the allowance is known. */
+.yts-quota {
+  margin-left: auto;
+  flex: 0 0 auto;
+  align-self: flex-start;
+  line-height: 32px;
+  font-size: 12px;
+  white-space: nowrap;
+  opacity: 0.55;
+  font-variant-numeric: tabular-nums;
+}
+
+.yts-quota + .yts-collapse {
+  margin-left: 0;
+}
+
+.yts-quota-low {
+  opacity: 1;
+  color: #ffb84d;
+}
+
+html:not([dark]) .yts-quota-low {
+  color: #a15c00;
+}
+
 .yts-collapse {
   margin-left: auto;
   flex: 0 0 auto;

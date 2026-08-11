@@ -176,6 +176,10 @@
       );
       ns.summarisedIds.add(videoId);
       meta.stats = res.stats || null;
+      meta.quota = res.quota || null;
+      // Remembered so the next panel can show the allowance immediately,
+      // rather than only once its own summary has finished arriving.
+      if (res.quota) ns.lastQuota = res.quota;
       meta.yourVote = res.stats ? res.stats.yourVote : null;
       ns.panel.renderSummary(res.markdown, meta, videoId);
       ns.resetButtonState(btn);
