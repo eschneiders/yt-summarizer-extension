@@ -7,8 +7,6 @@ import {
   commitView,
   hasViewed,
   readSummary,
-  readCurrentSummary,
-  commitAnonRead,
   writeSummary,
   logGeminiCall,
   spendSince,
@@ -69,57 +67,6 @@ export async function resolveDurationOrRefuse(videoId, claimedSeconds) {
     }
     throw err;
   }
-}
-
-// ---------- the anonymous path ----------
-//
-// Deliberately a separate function that shares none of the machinery below.
-// Everything past this point can spend money; this cannot, and the way that is
-// guaranteed is that it never calls any of it. No duration lookup, no quota, no
-// spend cap, no Gemini client - because the only thing it can do is hand back
-// text that is already written and already paid for.
-//
-// What stops this being a hole is not the daily count, which anyone can reset
-// by clearing their browser storage. It is that resetting it buys nothing but
-// more reads of summaries that already exist, and those cost nothing to serve.
-export async function serveAnonymous({ videoId, anonId }) {
-  const existing = await readCurrentSummary(videoId);
-
-  // Nobody has written this one yet, and writing it costs money. This is the
-  // moment the extension asks for an account, so the message has to carry its
-  // own weight - it is the whole pitch.
-  if (!existing) {
-    throw new SummariseError(
-      'SIGN_IN_TO_GENERATE',
-      'Nobody has summarised this video yet. Sign in to generate it — free.'
-    );
-  }
-
-  // Checked after existence, so someone who has run out is told they have run
-  // out only for videos that actually had something to give. It also keeps the
-  // two refusals from being a reliable way to probe what is in the store.
-  const read = await commitAnonRead(anonId, videoId, config.anonDailyReads);
-  if (!read.allowed) {
-    throw new SummariseError(
-      'ANON_LIMIT',
-      `That is your ${config.anonDailyReads} free summaries for today. ` +
-        'Sign in for more — it is still free.',
-      { anon: { used: read.used, limit: config.anonDailyReads, remaining: 0 } }
-    );
-  }
-
-  return {
-    markdown: existing.markdown,
-    model: existing.model,
-    generated: false,
-    anonymous: true,
-    anon: { used: read.used, limit: config.anonDailyReads, remaining: read.remaining },
-    // An anonymous reader has no vote and no view history, and is deliberately
-    // told nothing about how popular a summary is. The client hides the whole
-    // row rather than rendering zeroes that look like real counts.
-    stats: null,
-    quota: null,
-  };
 }
 
 // Resolves what should happen for this (user, video) without spending anything:

@@ -32,10 +32,10 @@ Consequences that shaped the design, and shouldn't be undone:
 - **Users are never told whether a summary was freshly generated or served from
   the store.** It's an implementation detail; the only thing they should notice
   is that most summaries appear instantly.
-- **Signed out, you get 5 already-written summaries a day and cannot generate.**
-  The same rule stated from the cost side: reading is free to serve, so it can
-  be given away to someone with no account; generating is not, so it cannot.
-  See "The anonymous tier" below.
+- **There is no anonymous tier.** One was built and removed: five cached
+  summaries a day for a signed-out reader. The panel's "sign in, it's free"
+  message turned out to persuade well enough on its own, and one identity model
+  is far less to reason about than two.
 
 ---
 
@@ -66,7 +66,7 @@ server/               Node, one dependency (`pg`)
   src/schema.sql      applied idempotently at boot
   src/notify.js       one Telegram sendMessage call, everything else calls this
   src/digest.js       daily report + spend-cap alerts, polled every 5 min
-  test/api.test.mjs   114 assertions against a live server
+  test/api.test.mjs   102 assertions against a live server
 ```
 
 Content scripts load in manifest order and share one `window.__ytSummarizer`
@@ -100,7 +100,7 @@ the click handler resolves the surface from that stamp, not from the pathname.
 **Server** (needs Postgres):
 ```bash
 createdb yts_test && cd server && npm install && npm start
-cd server && npm test      # 114 assertions, in another terminal
+cd server && npm test      # 102 assertions, in another terminal
 ```
 
 **Extension**: `chrome://extensions` → Developer mode → Load unpacked. The ID
@@ -137,7 +137,7 @@ repo. **Losing it means losing the extension ID.**
 Railway environment: `DATABASE_URL`, `YTS_DATABASE_SSL=true`, `GEMINI_API_KEY`,
 `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `YOUTUBE_API_KEY`,
 `YTS_DAILY_SPEND_CAP_USD=2`, `YTS_WEEKLY_QUOTA_MINUTES=400`,
-`YTS_ANON_DAILY_READS=5`, `YTS_ALLOWED_ORIGINS=chrome-extension://ejijl…`,
+`YTS_ALLOWED_ORIGINS=chrome-extension://ejijl…`,
 `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `PORT=8787`.
 
 Cost: ~$5/mo Railway, $0 Neon free tier, $0 Pages, plus a few dollars of Gemini.
@@ -163,6 +163,12 @@ Cost: ~$5/mo Railway, $0 Neon free tier, $0 Pages, plus a few dollars of Gemini.
 - The hardcoded prices **overstate real spend by ~4x**. Trust the measured
   92 min/cent figure, not `estimateCost`. The spend cap uses the overstated
   numbers deliberately — erring towards stopping early is the right direction.
+  The **daily report does not**: it prices a day from video seconds at
+  `config.measuredMinutesPerCent`, because a report answers "what did I spend"
+  and the cap answers "what is the worst case". Both figures appear in a spend
+  alert so the two can never be confused. There is **no API for a Gemini key's
+  real balance or spend** — Cloud Billing export is the only route and it is not
+  worth the machinery, so the measured rate is the honest best available.
 - YouTube's `/api/timedtext` is dead for this purpose — HTTP 200 with a
   zero-length body without a proof-of-origin token. Don't suggest transcript
   scraping; that's why we send the URL to Gemini instead.
@@ -193,27 +199,6 @@ Cost: ~$5/mo Railway, $0 Neon free tier, $0 Pages, plus a few dollars of Gemini.
   and recycles card nodes.
 - CSS uses `max-height` + `overflow:hidden` for the collapse animation, so
   content past `max-height` is **silently clipped with no scrollbar**.
-
-## The anonymous tier
-
-Signed out, the extension mints a random id into `chrome.storage.local` and
-sends it as `X-YTS-Anon`. That buys **5 already-written summaries a day**,
-counted per video so re-opening one is free. It cannot generate anything.
-
-- `serveAnonymous()` in `summarise.js` is a **separate function that shares no
-  machinery with the paid path** — no duration lookup, no quota, no spend cap,
-  no Gemini client. That is the guarantee, not the daily count.
-- The id is **trivially resettable and deliberately not defended**. Resetting it
-  buys more reads of text that already exists, which costs $0 to serve. This was
-  an explicit decision, not an oversight.
-- An anonymous caller is **never told which videos have summaries**: per-video
-  stats 401, and `/v1/me/videos` returns empty so every card reads "Summarise".
-  Finding out is what clicking is for.
-- Two refusals drive sign-up: `SIGN_IN_TO_GENERATE` (nobody has done this one)
-  and `ANON_LIMIT` (five used today). Both render as an *invitation* with a
-  sign-in button, not an error, and both retry the summary automatically once
-  sign-in succeeds.
-- Known and accepted: rotating ids allows bulk-scraping the summary corpus.
 
 ## Guards on the money path, outermost first
 

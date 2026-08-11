@@ -37,15 +37,6 @@ function showQuota(q) {
     quotaEl.textContent = '—';
     return;
   }
-  // Signed out this is a count of summaries a day, not minutes of video a week.
-  // Two different things, so they get two different sentences.
-  if (q.anonymous) {
-    const left = Math.max(0, q.limit - q.used);
-    quotaEl.textContent =
-      `${left} of ${q.limit} free summaries left today · ` +
-      'sign in for a weekly allowance and to summarise videos nobody has done yet';
-    return;
-  }
   quotaEl.textContent = q.unlimited
     ? `${minutes(q.usedSeconds)} used this week · no limit on your account`
     : `${minutes(q.usedSeconds)} of ${minutes(q.limitSeconds)} used this week · ` +
@@ -77,11 +68,9 @@ async function refreshAccount() {
 
   if (!signedIn) {
     accountEl.textContent =
-      'Not signed in. You can read a few summaries a day that other people have ' +
-      'already generated; signing in is free and lets you summarise anything.';
-    // The badge refresh answers with the anonymous count, which showQuota picks
-    // up through the storage listener.
-    ask('YTS_REFRESH_BADGE');
+      'Not signed in. Summaries need an account — it is free, and it is only so ' +
+      'one person cannot use up the whole service.';
+    quotaEl.textContent = '—';
     return;
   }
 

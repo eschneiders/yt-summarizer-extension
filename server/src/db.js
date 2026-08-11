@@ -77,12 +77,6 @@ export function weekResetsAt(now = Date.now()) {
   return midnight + (7 - dayIndex) * DAY_MS;
 }
 
-// Calendar day, UTC: "2026-08-11". The bucket anonymous reads are counted in.
-// A day rather than a week because the point is a taste, not an allowance.
-export function dayKey(now = Date.now()) {
-  return new Date(now).toISOString().slice(0, 10);
-}
-
 // ---------- operations ----------
 
 // Every video referenced anywhere gets a row, so `revision` always has a home.
@@ -365,83 +359,6 @@ export async function deleteUserData(userId, userHash) {
   });
 }
 
-// ---------- anonymous readers ----------
-
-// How many distinct videos this anonymous reader has opened today.
-export async function anonReadsToday(anonId, now = Date.now()) {
-  const { rows } = await pool.query(
-    'SELECT COUNT(*) AS n FROM anon_reads WHERE anon_id = $1 AND day = $2',
-    [anonId, dayKey(now)]
-  );
-  return rows[0].n;
-}
-
-// Records that an anonymous reader opened a video, and reports what that
-// leaves. Returns `repeat: true` when they had already opened this same video
-// today, which costs nothing - the whole row is a no-op in that case.
-//
-// One transaction, because two clicks arriving together must not both read
-// "4 used" and both be allowed through.
-export async function commitAnonRead(anonId, videoId, limit, now = Date.now()) {
-  const day = dayKey(now);
-
-  return transaction(async (client) => {
-    // There is no single row to lock here - the limit is over a COUNT, and
-    // Postgres will not take FOR UPDATE on an aggregate. An advisory lock keyed
-    // on the reader and the day serialises exactly the pair of clicks that
-    // could otherwise both read "4 used" and both be let through. It is
-    // released when the transaction ends, however it ends.
-    await client.query('SELECT pg_advisory_xact_lock(hashtext($1)::bigint)', [`${anonId}:${day}`]);
-
-    const seen = await client.query(
-      'SELECT 1 FROM anon_reads WHERE anon_id = $1 AND day = $2 AND video_id = $3',
-      [anonId, day, videoId]
-    );
-    const { rows: countRows } = await client.query(
-      'SELECT COUNT(*) AS n FROM anon_reads WHERE anon_id = $1 AND day = $2',
-      [anonId, day]
-    );
-    const used = countRows[0].n;
-
-    if (seen.rowCount > 0) {
-      return { allowed: true, repeat: true, used, remaining: Math.max(0, limit - used) };
-    }
-    if (used >= limit) {
-      return { allowed: false, repeat: false, used, remaining: 0 };
-    }
-
-    await client.query(
-      'INSERT INTO anon_reads (anon_id, day, video_id, read_at) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING',
-      [anonId, day, videoId, now]
-    );
-    return { allowed: true, repeat: false, used: used + 1, remaining: Math.max(0, limit - used - 1) };
-  });
-}
-
-// Yesterday's rows have no job left to do. Anonymous reading is deliberately
-// not a history anyone keeps.
-export async function pruneAnonReads(now = Date.now()) {
-  await pool.query('DELETE FROM anon_reads WHERE day < $1', [dayKey(now)]);
-}
-
-// The current summary for a video, without needing a user. Used only by the
-// anonymous path, which never bills, never meters and never generates - so it
-// has no reason to touch quota, views or duration.
-export async function readCurrentSummary(videoId) {
-  // Defaults to revision 1 rather than giving up when the videos row is
-  // missing. In practice one is always written before a summary is - but the
-  // summary is the thing being asked for, and refusing to hand over text that
-  // demonstrably exists because a bookkeeping row does not is the wrong way
-  // round. This path never writes, so it cannot repair the row either.
-  const { rows } = await pool.query(
-    'SELECT COALESCE((SELECT revision FROM videos WHERE video_id = $1), 1) AS revision',
-    [videoId]
-  );
-  const { revision } = rows[0];
-  const summary = await readSummary(videoId, revision);
-  return summary ? { ...summary, revision } : null;
-}
-
 // ---------- summaries ----------
 
 export async function readSummary(videoId, revision) {
@@ -476,6 +393,21 @@ export async function getSetting(key, fallback = null) {
   return rows.length ? rows[0].value : fallback;
 }
 
+// Atomically claims a key for a new value, returning false if it already held
+// that value. This is what stops two instances - Railway can run more than one,
+// and a redeploy briefly overlaps them - both deciding they are the one to send
+// today's report. Read-then-write cannot do this: both would read yesterday's
+// value, both would find it stale, and both would send.
+export async function claimSetting(key, value) {
+  const { rowCount } = await pool.query(
+    `INSERT INTO settings (key, value) VALUES ($1, $2)
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+     WHERE settings.value IS DISTINCT FROM EXCLUDED.value`,
+    [key, value]
+  );
+  return rowCount > 0;
+}
+
 export async function setSetting(key, value) {
   await pool.query(
     `INSERT INTO settings (key, value) VALUES ($1, $2)
@@ -493,7 +425,11 @@ export async function readDigestStats(startMs, endMs) {
   const { rows } = await pool.query(
     `SELECT
        COALESCE((SELECT SUM(cost_usd) FROM gemini_calls
-                  WHERE created_at >= $1 AND created_at < $2), 0)::float8      AS spend_usd,
+                  WHERE created_at >= $1 AND created_at < $2), 0)::float8      AS capped_usd,
+       -- Video seconds are what the real cost tracks, so the report prices
+       -- these at the measured rate rather than trusting the token estimate.
+       COALESCE((SELECT SUM(duration_seconds) FROM gemini_calls
+                  WHERE created_at >= $1 AND created_at < $2), 0)             AS duration_seconds,
        (SELECT COUNT(*) FROM gemini_calls
           WHERE created_at >= $1 AND created_at < $2)                         AS generations,
        (SELECT COUNT(*) FROM users

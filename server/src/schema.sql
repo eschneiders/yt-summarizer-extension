@@ -47,23 +47,13 @@ CREATE TABLE IF NOT EXISTS retired_usage (
   PRIMARY KEY (user_hash, week)
 );
 
--- Anonymous readers, so someone can try the extension before deciding to hand
--- over a Google account. The id is minted by the extension and kept in its
--- local storage, which makes it resettable - clear it and the daily count
--- starts again. That is a known and accepted trade, because of what it does
--- and does not unlock: an anonymous request can only be served a summary that
--- already exists, and serving one of those costs nothing. Generating - the only
--- thing that spends money - always requires a signed-in account.
---
--- One row per (reader, day, video) rather than a counter, so re-opening the
--- same video on the same day is free rather than spending another read.
-CREATE TABLE IF NOT EXISTS anon_reads (
-  anon_id  TEXT   NOT NULL,
-  day      TEXT   NOT NULL,
-  video_id TEXT   NOT NULL,
-  read_at  BIGINT NOT NULL,
-  PRIMARY KEY (anon_id, day, video_id)
-);
+-- There was briefly an anonymous tier - a forgeable id buying a few
+-- already-written summaries a day without an account. It is gone: the panel's
+-- "sign in, it's free" message turned out to be persuasive enough on its own,
+-- and one identity model is far less to reason about than two. Dropped rather
+-- than left behind, because a table nothing writes to is a table someone will
+-- eventually wonder about.
+DROP TABLE IF EXISTS anon_reads;
 
 -- Rate limiting in the database rather than in memory, so it holds across a
 -- restart and across more than one instance.
@@ -145,7 +135,6 @@ CREATE TABLE IF NOT EXISTS gemini_calls (
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions (user_id);
-CREATE INDEX IF NOT EXISTS idx_anon_reads_day ON anon_reads (anon_id, day);
 CREATE INDEX IF NOT EXISTS idx_votes_video   ON votes (video_id, revision);
 CREATE INDEX IF NOT EXISTS idx_views_video   ON views (video_id);
 -- The spend cap sums this window before every call, so it must be indexed.

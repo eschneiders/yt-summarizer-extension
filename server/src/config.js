@@ -24,12 +24,6 @@ export const config = {
   // every week. Most will not come close.
   weeklyQuotaSeconds: num(process.env.YTS_WEEKLY_QUOTA_MINUTES, 400) * 60,
 
-  // What someone gets before signing in: this many *already-written* summaries
-  // a day, counted per video so re-opening one is free. Generating is never
-  // anonymous, so this allowance only ever hands out things that cost nothing
-  // to serve - which is exactly why it is safe to let it be resettable.
-  anonDailyReads: num(process.env.YTS_ANON_DAILY_READS, 5),
-
   // A summary is re-run when enough readers call it bad. Both conditions have
   // to hold: an absolute floor, so three people cannot bin a summary nobody
   // else has read, and a majority, so a popular summary is not re-run because
@@ -79,6 +73,20 @@ export const config = {
 
   // How long a sign-in lasts before it has to be repeated.
   sessionDays: num(process.env.YTS_SESSION_DAYS, 90),
+
+  // What a summary actually costs, measured from real billing rather than from
+  // list prices: 138 generations averaging ~20 minutes came to 29c, which is
+  // ~92 minutes of video per US cent. (Cross-check: 138 * 20 / 92 = 30c.)
+  //
+  // estimateCost() in gemini.js works from published per-token prices and comes
+  // out roughly 4x high. That overstatement is deliberate where it is used - the
+  // spend cap should err towards stopping early - but it is simply wrong in a
+  // report, which is answering "what did I spend", not "what is the worst case".
+  // So the two numbers are kept apart: the cap uses tokens, the report uses this.
+  //
+  // There is no API that reports a Gemini API key's real balance or spend, so a
+  // measured rate is the honest best available. Update it if billing drifts.
+  measuredMinutesPerCent: num(process.env.YTS_MEASURED_MINUTES_PER_CENT, 92),
 
   // The backstop. Checked before every call that would cost money, so a bug or
   // an attacker hits a wall rather than a bill. At the measured rate of ~92

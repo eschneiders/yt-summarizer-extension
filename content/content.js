@@ -282,12 +282,9 @@
         const code = res && res.code;
         console.error('[yts] summarise failed for %s: %s', videoId, res && res.error);
 
-        // The three ways a signed-out person is asked to sign in. They are the
-        // whole conversion path, so they get an invitation and a button rather
-        // than a red box: nobody has written this one yet, you have used your
-        // free reads for today, or the server wants an account outright.
-        const wantsAccount =
-          code === 'SIGN_IN_REQUIRED' || code === 'SIGN_IN_TO_GENERATE' || code === 'ANON_LIMIT';
+        // Being asked to sign in is the conversion path, not a failure, so it
+        // gets an invitation and a button rather than a red box.
+        const wantsAccount = code === 'SIGN_IN_REQUIRED';
 
         ns.panel.renderError((res && res.error) || 'Unknown error', {
           // Both mean "this extension is not pointed at a working service",
@@ -300,15 +297,11 @@
           // that actually persuades anyone - that this costs nothing.
           invitation: wantsAccount || code === 'STILL_RUNNING',
           title:
-            code === 'SIGN_IN_TO_GENERATE'
-              ? 'Be the first to summarise this'
-              : code === 'ANON_LIMIT'
-                ? "That's your free summaries for today"
-                : code === 'STILL_RUNNING'
-                  ? 'Still being written'
-                  : wantsAccount
-                    ? 'Sign in to summarise — it’s free'
-                    : null,
+            code === 'STILL_RUNNING'
+              ? 'Still being written'
+              : wantsAccount
+                ? 'Sign in to summarise — it’s free'
+                : null,
           // Said plainly, and in the same words on every one of these, because
           // "free" is the whole answer to "why should I hand over an account".
           note: wantsAccount
@@ -336,7 +329,7 @@
         // failure, so neither should read like one on the button.
         ns.setButtonLabel(
           btn,
-          code === 'QUOTA_EXCEEDED' || code === 'ANON_LIMIT'
+          code === 'QUOTA_EXCEEDED'
             ? 'Limit reached'
             : wantsAccount
               ? 'Sign in'

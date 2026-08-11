@@ -29,22 +29,6 @@ async function paintBadge(quota) {
     return;
   }
 
-  // Signed out, the number on the badge is summaries left today, not minutes.
-  // Deliberately not dressed up as an allowance: it is a taste, and the title
-  // is where the invitation to sign in belongs.
-  if (quota.anonymous) {
-    const left = Math.max(0, quota.limit - quota.used);
-    await chrome.action.setBadgeText({ text: String(left) });
-    await chrome.action.setBadgeBackgroundColor({ color: left === 0 ? '#c2410c' : '#3f3f46' });
-    await chrome.action.setBadgeTextColor({ color: '#ffffff' });
-    await chrome.action.setTitle({
-      title:
-        `YouTube Feed Summariser — ${left} of ${quota.limit} free summaries left today. ` +
-        'Sign in for a weekly allowance and to summarise new videos.',
-    });
-    return;
-  }
-
   const left = Math.round(quota.remainingSeconds / 60);
   const limit = Math.round(quota.limitSeconds / 60);
   const low = quota.remainingSeconds <= quota.limitSeconds * BADGE_LOW_FRACTION;
@@ -74,11 +58,7 @@ async function rememberQuota(quota) {
 
 async function refreshBadge() {
   const res = await api.quota();
-  if (!res || !res.ok) return rememberQuota(null);
-  // Signed out the server answers with a daily read count instead of a weekly
-  // allowance. Tagged rather than reshaped, so nothing downstream mistakes one
-  // for the other.
-  await rememberQuota(res.anonymous ? { anonymous: true, ...res.anon } : res.quota);
+  await rememberQuota(res && res.ok ? res.quota : null);
 }
 
 // Where summaries come from unless someone deliberately points this elsewhere.

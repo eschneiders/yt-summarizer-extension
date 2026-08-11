@@ -11,9 +11,19 @@
 
 import { randomBytes, createHash } from 'node:crypto';
 
-import { pool, writeSummary, logGeminiCall, writeVideoDuration, getSetting, setSetting, readDigestStats } from '../src/db.js';
+import {
+  pool,
+  writeSummary,
+  logGeminiCall,
+  writeVideoDuration,
+  getSetting,
+  setSetting,
+  readDigestStats,
+  claimSetting,
+  weekKey,
+} from '../src/db.js';
 import { parseIso8601Duration } from '../src/youtube.js';
-import { formatDigest, maybeSendDailyDigest, maybeSendSpendAlert } from '../src/digest.js';
+import { formatDigest, measuredUsd, maybeSendDailyDigest, maybeSendSpendAlert } from '../src/digest.js';
 
 const BASE = process.env.YTS_TEST_BASE || 'http://localhost:8787';
 const DAY_MS = 86400000;
@@ -174,18 +184,11 @@ section('extension api.js client');
   r = await api.view(video, 900);
   ok('a repeat view is not billed twice', r.quota.usedSeconds === before + 900);
 
-  // Signed out, the client no longer refuses locally - it sends an anonymous id
-  // and lets the server decide, because whether a video can be read anonymously
-  // depends on something the extension is deliberately not told: whether anyone
-  // has summarised it yet. Account-only routes still come back 401.
+  // Signed out, the client refuses locally rather than firing a request it
+  // knows will 401.
   delete store.sessionToken;
   r = await api.read(video);
-  ok('signed out, an account-only route is refused by the server', r && r.code === 'SIGN_IN_REQUIRED');
-  ok('and the client minted an anonymous id to ask with', /^[0-9a-f]{32}$/.test(store.anonId || ''));
-
-  const mintedOnce = store.anonId;
-  await api.quota();
-  ok('which it then keeps rather than re-minting', store.anonId === mintedOnce);
+  ok('no session short-circuits to SIGN_IN_REQUIRED', r && r.code === 'SIGN_IN_REQUIRED');
   store.sessionToken = user.token;
 
   store.serviceUrl = 'http://localhost:9';
@@ -241,6 +244,44 @@ section('weekly quota');
   await burnAllowance(poor);
   r = await post(poor, `/v1/videos/${owned}/view`, { durationSeconds: 60 });
   ok('a video they already paid for still opens when out of quota', r.status === 200);
+}
+
+section('the allowance rolls over with the week');
+{
+  const user = await newUser();
+  await post(user, `/v1/videos/${newVideoId()}/view`, { durationSeconds: 1800 });
+  ok('30 minutes spent this week', (await get(user, '/v1/me/quota')).quota.usedSeconds === 1800);
+
+  // Move the usage into last week's bucket, which is what the passage of time
+  // does. readQuota reads the *current* week's row, so the old one goes inert
+  // rather than being cleaned up - there is nothing to reset, which is the
+  // point of bucketing by week key instead of storing a running total.
+  const { week } = (await get(user, '/v1/me/quota')).quota;
+  const lastWeek = weekKey(Date.now() - 7 * DAY_MS);
+  await pool.query('UPDATE weekly_usage SET week = $1 WHERE user_id = $2 AND week = $3', [
+    lastWeek,
+    user.userId,
+    week,
+  ]);
+
+  const fresh = (await get(user, '/v1/me/quota')).quota;
+  ok('a new week starts from zero', fresh.usedSeconds === 0, `used=${fresh.usedSeconds}`);
+  ok('with the full allowance back', fresh.remainingSeconds === fresh.limitSeconds);
+  ok(
+    'and last week is still on record, not deleted',
+    (await pool.query('SELECT seconds FROM weekly_usage WHERE user_id = $1 AND week = $2', [
+      user.userId,
+      lastWeek,
+    ])).rows[0].seconds === 1800
+  );
+
+  // The reset is a real boundary, not a rolling 7 days.
+  ok(
+    'resetsAt is the coming Monday 00:00 UTC',
+    new Date(fresh.resetsAt).getUTCDay() === 1 &&
+      new Date(fresh.resetsAt).getUTCHours() === 0,
+    new Date(fresh.resetsAt).toISOString()
+  );
 }
 
 section('the unlimited plan');
@@ -382,126 +423,6 @@ section('summarise endpoint');
   ok('once under the cap again, it reaches the key check', r.events.at(-1).data.code === 'NO_API_KEY');
 }
 
-// ----------------------------------------------------------------- anonymous
-
-section('anonymous readers: existing summaries only, five a day');
-{
-  // The extension mints one of these and keeps it in local storage. Forgeable
-  // by design - see the schema comment for why that is acceptable here.
-  const newAnon = () => randomBytes(16).toString('hex');
-
-  const anonGet = (anonId, path) =>
-    fetch(`${BASE}${path}`, { headers: { 'X-YTS-Anon': anonId } }).then(async (r) => ({
-      status: r.status,
-      ...(await r.json()),
-    }));
-
-  const anonStream = async (anonId, videoId) => {
-    const res = await fetch(`${BASE}/v1/videos/${videoId}/summary`, {
-      method: 'POST',
-      headers: { 'X-YTS-Anon': anonId, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ durationSeconds: 600 }),
-    });
-    const events = [];
-    for (const block of (await res.text()).split('\n\n')) {
-      const e = block.match(/^event: (.+)$/m);
-      const d = block.match(/^data: (.+)$/m);
-      if (e && d) events.push({ event: e[1], data: JSON.parse(d[1]) });
-    }
-    return events.at(-1);
-  };
-
-  let r = await fetch(`${BASE}/v1/me/quota`, { headers: { 'X-YTS-Anon': 'short' } });
-  ok('a malformed anonymous id is not an identity', r.status === 401);
-
-  const anon = newAnon();
-  r = await anonGet(anon, '/v1/me/quota');
-  ok('a well-formed one is accepted', r.ok === true && r.anonymous === true);
-  ok('and reports a daily read count, not minutes', r.anon.limit === 5 && r.anon.used === 0);
-
-  // The headline rule: no summary yet means no generation, ever, anonymously.
-  const fresh = newVideoId();
-  let done = await anonStream(anon, fresh);
-  ok(
-    'an unsummarised video asks for an account instead of generating',
-    done.data.code === 'SIGN_IN_TO_GENERATE',
-    JSON.stringify(done.data)
-  );
-  ok(
-    'and nothing was spent finding that out',
-    (await pool.query('SELECT COUNT(*) AS n FROM gemini_calls WHERE video_id = $1', [fresh]))
-      .rows[0].n === 0
-  );
-  ok(
-    'a refused generation does not cost a daily read',
-    (await anonGet(anon, '/v1/me/quota')).anon.used === 0
-  );
-
-  // Five that do exist.
-  const seeded = [];
-  for (let i = 0; i < 6; i++) {
-    const v = newVideoId();
-    await writeSummary(v, 1, `# Summary ${i}\n\nBody.`, 'test-model');
-    seeded.push(v);
-  }
-
-  done = await anonStream(anon, seeded[0]);
-  ok('an existing summary is served anonymously', done.event === 'done' && done.data.ok);
-  ok('with the text', done.data.markdown.includes('Summary 0'));
-  ok('and it counts as one of the five', done.data.anon.used === 1 && done.data.anon.remaining === 4);
-  ok('and reveals no stats to an anonymous reader', done.data.stats === null);
-
-  done = await anonStream(anon, seeded[0]);
-  ok('re-opening the same video does not cost another', done.data.anon.used === 1);
-
-  for (let i = 1; i < 5; i++) await anonStream(anon, seeded[i]);
-  ok('five used', (await anonGet(anon, '/v1/me/quota')).anon.used === 5);
-
-  done = await anonStream(anon, seeded[5]);
-  ok('the sixth is refused', done.data.code === 'ANON_LIMIT', JSON.stringify(done.data));
-  ok(
-    'but one already read today still opens',
-    (await anonStream(anon, seeded[0])).data.ok === true
-  );
-
-  // Clearing the id gets a fresh five. This is a known, accepted trade: it only
-  // ever hands out text that already exists, which costs nothing to serve.
-  ok(
-    'a fresh id starts over, which is the accepted trade',
-    (await anonStream(newAnon(), seeded[5])).data.ok === true
-  );
-
-  // Nothing an anonymous caller can reach writes anything owned by a person,
-  // and nothing tells them what is in the store.
-  ok(
-    'per-video stats are refused, so existence cannot be probed',
-    (await anonGet(anon, `/v1/videos/${seeded[0]}`)).status === 401
-  );
-  ok('the owned-video list is empty', (await anonGet(anon, '/v1/me/videos')).videoIds.length === 0);
-
-  const anonPost = (path, body) =>
-    fetch(`${BASE}${path}`, {
-      method: 'POST',
-      headers: { 'X-YTS-Anon': anon, 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    }).then((r) => r.status);
-
-  ok('voting needs an account', (await anonPost(`/v1/videos/${seeded[0]}/vote`, { vote: 'up' })) === 401);
-  ok('claiming a view needs an account', (await anonPost(`/v1/videos/${seeded[0]}/view`, { durationSeconds: 60 })) === 401);
-
-  const del = await fetch(`${BASE}/v1/me`, { method: 'DELETE', headers: { 'X-YTS-Anon': anon } });
-  ok('there is no anonymous account to erase', del.status === 401);
-
-  // A signed-in user is unaffected by any of this.
-  const user = await newUser();
-  const signedIn = await stream(user, seeded[0], 600);
-  ok(
-    'signing in still bills minutes as before',
-    signedIn.events.at(-1).data.quota.usedSeconds === 600,
-    JSON.stringify(signedIn.events.at(-1).data.quota)
-  );
-}
-
 // ------------------------------------------------------------------ duration
 
 section('how long a video is, is the server\'s to decide');
@@ -620,35 +541,51 @@ section('downvote threshold, capped at one rewrite');
 
 section('daily digest and spend alerts');
 {
+  // The number that matters: 138 generations of ~20 min really cost 29c, so a
+  // day of 23 such videos (460 min) should read as ~5c, not the ~20c the
+  // token-based estimate would claim.
+  ok(
+    'prices a day at the measured rate, not the inflated token estimate',
+    Math.abs(measuredUsd(460 * 60) - 0.05) < 0.005,
+    `got ${measuredUsd(460 * 60)}`
+  );
+  ok(
+    "reproduces the user's own billing: 138 x 20 min ~= 29c",
+    Math.abs(measuredUsd(138 * 20 * 60) - 0.29) < 0.02,
+    `got ${measuredUsd(138 * 20 * 60)}`
+  );
+
   ok(
     'formats a report from stats alone, no I/O involved',
     formatDigest('2026-08-11', {
-      spend_usd: 0.183,
+      capped_usd: 0.183,
+      duration_seconds: 460 * 60,
       generations: 23,
       new_users: 2,
       reads: 37,
       active_readers: 14,
     }) ===
       'YTS daily report — 2026-08-11 (UTC)\n' +
-        'Spend: $0.18 across 23 generations\n' +
+        'Spend: ~5.0c · 23 generations · 460 min of video\n' +
         'New sign-ups: 2\n' +
-        'Summaries opened: 37 by 14 people'
+        'Opened: 37 by 14 people'
+  );
+  ok(
+    'mentions the cap only once spend approaches it',
+    !formatDigest('2026-08-11', {
+      capped_usd: 0.1, duration_seconds: 600, generations: 1, new_users: 0, reads: 1, active_readers: 1,
+    }).includes('cap') &&
+      formatDigest('2026-08-11', {
+        capped_usd: 1.2, duration_seconds: 600, generations: 1, new_users: 0, reads: 1, active_readers: 1,
+      }).includes('Against the $2.00 cap')
   );
   ok(
     'singular forms when the count is one',
     formatDigest('2026-08-11', {
-      spend_usd: 0.01,
-      generations: 1,
-      new_users: 0,
-      reads: 1,
-      active_readers: 1,
-    }).includes('1 generation\n') &&
+      capped_usd: 0.01, duration_seconds: 600, generations: 1, new_users: 0, reads: 1, active_readers: 1,
+    }).includes('1 generation ') &&
       formatDigest('2026-08-11', {
-        spend_usd: 0,
-        generations: 0,
-        new_users: 0,
-        reads: 1,
-        active_readers: 1,
+        capped_usd: 0, duration_seconds: 0, generations: 0, new_users: 0, reads: 1, active_readers: 1,
       }).includes('1 person')
   );
 
@@ -659,7 +596,7 @@ section('daily digest and spend alerts');
   await setSetting('digest_last_day', 'unset-marker');
   await maybeSendDailyDigest();
   ok(
-    'without Telegram configured, nothing is sent and nothing is marked sent',
+    'without Telegram configured, nothing is sent and nothing is claimed',
     (await getSetting('digest_last_day')) === 'unset-marker'
   );
 
@@ -669,6 +606,14 @@ section('daily digest and spend alerts');
     'same for the spend alert - it does not silently mark itself done',
     (await getSetting('spend_alert_level')) === '0'
   );
+
+  // The claim is what stops two instances both sending the same report. First
+  // caller wins; every later one is told the day is already spoken for.
+  await setSetting('claim-probe', 'day-1');
+  ok('re-claiming the same value is refused', (await claimSetting('claim-probe', 'day-1')) === false);
+  ok('claiming a new value succeeds', (await claimSetting('claim-probe', 'day-2')) === true);
+  ok('and only once', (await claimSetting('claim-probe', 'day-2')) === false);
+  await pool.query("DELETE FROM settings WHERE key = 'claim-probe'");
 
   // readDigestStats itself has no such guard - it is a plain read, and this is
   // what proves the query counts the right things in the right window.
@@ -694,8 +639,8 @@ section('daily digest and spend alerts');
   );
   ok(
     'and sums its cost',
-    Math.abs(inside.spend_usd - before.spend_usd - 0.05) < 1e-9,
-    `before=${before.spend_usd} inside=${inside.spend_usd}`
+    Math.abs(inside.capped_usd - before.capped_usd - 0.05) < 1e-9,
+    `before=${before.capped_usd} inside=${inside.capped_usd}`
   );
 
   await pool.query('DELETE FROM gemini_calls WHERE user_id = $1', ['digest-test']);
