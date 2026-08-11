@@ -233,6 +233,22 @@ To hand a problem to a coding agent:
 SELECT day, kind, count, sample FROM incidents ORDER BY last_at DESC LIMIT 20;
 ```
 
+## Deploying without breaking the instance already running
+
+Railway overlaps instances during a redeploy — for about a minute, old and new
+both serve traffic against **one** database. Two consequences, both learned the
+hard way:
+
+- **Never drop or rename a table in the same deploy that stops using it.**
+  Dropping `anon_reads` did exactly this: the new instance ran the migration
+  while the old one was still reading that table, so signed-out requests hit
+  `relation "anon_reads" does not exist` until the old instance drained. Stop
+  using it in one deploy, drop it in a later one.
+- **Anything that fires once must claim its turn atomically**, not
+  read-then-write — otherwise both instances read the same stale value and both
+  act. See `claimSetting` in `db.js`, used by the digest, the spend alert, the
+  incident alert and the quota warning.
+
 ## Guards on the money path, outermost first
 
 In `server/src/summarise.js`, in this order and for this reason:
