@@ -62,3 +62,52 @@ export const config = {
   // impatient person clicking ten cards - turning into ten paid calls.
   maxConcurrentPerUser: num(process.env.YTS_MAX_CONCURRENT_PER_USER, 1),
 };
+
+// Checked before anything connects to anything. A misconfigured deploy should
+// say what is wrong in its first log line, not throw a driver stack trace four
+// minutes later when a healthcheck gives up - that failure mode looks like a
+// broken server rather than an unset variable, and it is the one people
+// actually hit on a first deploy.
+export function validateConfig() {
+  const problems = [];
+
+  // Copying a setup guide and leaving the angle brackets in is the single most
+  // common way this goes wrong, so name it explicitly rather than letting it
+  // surface as a connection-string parse error.
+  const placeholder = (value) => /^<.*>$/.test(String(value).trim());
+
+  if (!config.databaseUrl) {
+    problems.push('DATABASE_URL is not set.');
+  } else if (placeholder(config.databaseUrl)) {
+    problems.push(
+      'DATABASE_URL still contains the placeholder text from the setup guide. ' +
+        'Replace it with the connection string from your database provider.'
+    );
+  } else if (!/^postgres(ql)?:\/\//.test(config.databaseUrl)) {
+    problems.push('DATABASE_URL does not look like a Postgres URL (postgresql://…).');
+  }
+
+  // Absent is fine - the service still serves summaries other people generated,
+  // it just cannot make new ones. Placeholder text is never fine.
+  if (config.geminiApiKey && placeholder(config.geminiApiKey)) {
+    problems.push(
+      'GEMINI_API_KEY still contains the placeholder text from the setup guide.'
+    );
+  }
+
+  if (problems.length) {
+    console.error('\n[yts:api] cannot start - configuration problems:\n');
+    problems.forEach((p) => console.error('  · %s', p));
+    console.error('');
+    process.exit(1);
+  }
+
+  if (!config.geminiApiKey) {
+    console.warn(
+      '[yts:api] no GEMINI_API_KEY set - existing summaries will be served, but no new ones can be generated.'
+    );
+  }
+  if (config.allowedOrigins.includes('*')) {
+    console.warn('[yts:api] YTS_ALLOWED_ORIGINS is "*" - any website can call this API.');
+  }
+}

@@ -1,6 +1,6 @@
 import { createServer } from 'node:http';
 
-import { config } from './config.js';
+import { config, validateConfig } from './config.js';
 import {
   readStats,
   readQuota,
@@ -345,9 +345,22 @@ const server = createServer(async (req, res) => {
   }
 });
 
+// Configuration before anything else, so a bad variable is the first thing in
+// the log rather than a driver error several minutes later.
+validateConfig();
+
 // Schema before listener: a request that arrives against a half-created schema
 // fails in a far more confusing way than a few seconds of startup delay.
-await migrate();
+try {
+  await migrate();
+} catch (err) {
+  console.error('\n[yts:api] cannot start - the database is unreachable:\n');
+  console.error('  · %s\n', err.message);
+  console.error(
+    '  Check DATABASE_URL, and that YTS_DATABASE_SSL=true if your provider requires TLS.\n'
+  );
+  process.exit(1);
+}
 
 server.listen(config.port, () => {
   console.log(
