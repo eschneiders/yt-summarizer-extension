@@ -122,6 +122,12 @@ window.__ytSummarizer = window.__ytSummarizer || {};
     channelHome: {
       name: 'channelHome',
       kind: 'grid',
+      // A popup, not an inline accordion. These shelves are horizontal
+      // scrollers: anything inserted into one becomes another item in a row
+      // laid out sideways and gets clipped at the shelf's edge, which is why
+      // the summary came out cut off on both sides. A popup is positioned in
+      // page coordinates against the card, so the shelf cannot crop it.
+      panelMode: 'popup',
       matches: (pathname) =>
         /^\/(@[^/]+|channel\/[^/]+|c\/[^/]+|user\/[^/]+)(\/featured)?\/?$/.test(pathname),
       gridSelector:

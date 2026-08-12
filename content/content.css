@@ -49,6 +49,12 @@
   padding: 5px 10px 5px 8px;
   font-size: 11px;
   background: rgba(255, 255, 255, 0.1);
+  /* The metadata block is a column flexbox, so a child stretches to its full
+     width by default - which made the featured video's button run the whole
+     width of the page. Both are needed: align-self for the flex case, and
+     fit-content for a plain block parent. */
+  align-self: flex-start;
+  width: fit-content;
   max-width: 100%;
 }
 
