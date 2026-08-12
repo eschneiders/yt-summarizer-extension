@@ -29,6 +29,20 @@ window.__ytSummarizer = window.__ytSummarizer || {};
     'a.yt-lockup-view-model__content-image',
   ];
 
+  // Where a button goes when it cannot live on the thumbnail. Tried in order,
+  // newest markup first, ending with the older Polymer ids as a backstop.
+  // Used by surfaces whose cards are small enough that YouTube starts an inline
+  // preview the moment the mouse approaches - that preview replaces the
+  // thumbnail's contents, so an overlay button vanishes exactly when someone
+  // reaches for it, at any position and any z-index.
+  const META_SELECTORS = [
+    '.yt-lockup-metadata-view-model__text-container',
+    '.yt-lockup-metadata-view-model',
+    'ytd-video-meta-block',
+    '#meta',
+    '#details',
+  ];
+
   ns.surfaces = {
     home: {
       name: 'home',
@@ -69,6 +83,12 @@ window.__ytSummarizer = window.__ytSummarizer || {};
         'ytd-section-list-renderer #contents.ytd-section-list-renderer, ytd-search #contents, #primary ytd-section-list-renderer',
       cardSelector: 'ytd-video-renderer, yt-lockup-view-model',
       thumbnailSelectors: THUMBNAIL_SELECTORS,
+      // Same problem as channel home: hovering a result starts the inline
+      // preview, which replaces the thumbnail and takes an overlay button with
+      // it. The panel stays inline here though - a vertical list of results is
+      // not a horizontal scroller, so nothing clips it.
+      buttonPlacement: 'meta',
+      mountSelectors: META_SELECTORS,
       getVideoId: extractVideoId,
     },
     // A channel's Videos tab (and Live, which is the same markup). Matched by
@@ -136,16 +156,7 @@ window.__ytSummarizer = window.__ytSummarizer || {};
         'ytd-grid-video-renderer, ytd-video-renderer, yt-lockup-view-model, ytd-rich-item-renderer',
       thumbnailSelectors: THUMBNAIL_SELECTORS,
       buttonPlacement: 'meta',
-      // Tried in order, newest markup first. The last two are the card itself
-      // as a backstop, so the button still appears somewhere sensible if
-      // YouTube renames the metadata block again.
-      mountSelectors: [
-        '.yt-lockup-metadata-view-model__text-container',
-        '.yt-lockup-metadata-view-model',
-        'ytd-video-meta-block',
-        '#meta',
-        '#details',
-      ],
+      mountSelectors: META_SELECTORS,
       getVideoId: extractVideoId,
     },
     // Watch history. Structurally identical to search - date-grouped sections
