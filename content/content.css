@@ -6,18 +6,11 @@
 .yts-summarize-btn {
   position: absolute;
   left: 8px;
-  /* Top-left, which is the one corner of a YouTube thumbnail that stays empty:
-     top-right gets Watch Later and Add to queue on hover, bottom-right the
-     duration badge, and the bottom edge the watched-progress bar plus the
-     hover-preview scrubber.
-
-     It started bottom-left and was unclickable on channel shelves. Moving the
-     mouse towards the button is itself what starts the inline preview, so the
-     preview and its scrubber appeared under the cursor before it arrived and
-     swallowed the click. Raising z-index alone did not fix it - the preview
-     paints in its own stacking context - so the button had to leave the bottom
-     edge entirely. */
-  top: 8px;
+  bottom: 8px;
+  /* Was 5. Raised because YouTube's inline hover preview paints over the
+     thumbnail; this is not enough on its own where the preview makes its own
+     stacking context (see the channelHome override below), but it does keep
+     the button above the ordinary thumbnail overlays. */
   z-index: 3000;
   pointer-events: auto;
   display: inline-flex;
@@ -40,6 +33,21 @@
      card; with one it truncates and the full text stays in the tooltip. */
   max-width: calc(100% - 16px);
   overflow: hidden;
+}
+
+/* Channel home only. Its shelves are the one place the bottom-left position is
+   unusable: the cards are small, so YouTube's inline hover preview starts and
+   lays its scrubber across the bottom edge before the cursor has finished
+   travelling to the button - moving the mouse towards the button is what
+   triggers the preview that then swallows the click. z-index does not save it,
+   because the preview paints in its own stacking context.
+
+   Every other surface keeps the button bottom-left, where it belongs: this is
+   a workaround for one page, not a redesign. Buttons carry data-yts-surface
+   precisely so a fix can be scoped to the surface that needs it. */
+.yts-summarize-btn[data-yts-surface='channelHome'] {
+  top: 8px;
+  bottom: auto;
 }
 
 .yts-summarize-btn > span {
