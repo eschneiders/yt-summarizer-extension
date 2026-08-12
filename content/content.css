@@ -6,13 +6,18 @@
 .yts-summarize-btn {
   position: absolute;
   left: 8px;
-  /* Clear of the very bottom edge, which is where YouTube stacks the watched-
-     progress bar and the hover-preview scrubber. */
-  bottom: 12px;
-  /* Was 5, which lost to YouTube's inline hover preview: moving the mouse onto
-     the button is itself what starts the preview, so the preview rendered on
-     top of the thing you were reaching for and swallowed the click. The button
-     has to outrank anything YouTube paints inside a thumbnail. */
+  /* Top-left, which is the one corner of a YouTube thumbnail that stays empty:
+     top-right gets Watch Later and Add to queue on hover, bottom-right the
+     duration badge, and the bottom edge the watched-progress bar plus the
+     hover-preview scrubber.
+
+     It started bottom-left and was unclickable on channel shelves. Moving the
+     mouse towards the button is itself what starts the inline preview, so the
+     preview and its scrubber appeared under the cursor before it arrived and
+     swallowed the click. Raising z-index alone did not fix it - the preview
+     paints in its own stacking context - so the button had to leave the bottom
+     edge entirely. */
+  top: 8px;
   z-index: 3000;
   pointer-events: auto;
   display: inline-flex;
