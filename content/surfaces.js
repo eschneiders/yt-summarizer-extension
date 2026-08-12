@@ -111,10 +111,9 @@ window.__ytSummarizer = window.__ytSummarizer || {};
     playlist: {
       name: 'playlist',
       kind: 'grid',
-      // Liked videos is /playlist?list=LL - the same page type, so it can only
-      // be excluded by query string. Watch Later (?list=WL) stays.
-      matches: (pathname, search = '') =>
-        pathname === '/playlist' && !/[?&]list=LL(&|$)/.test(search),
+      // Covers every list, including Watch Later (?list=WL) and Liked videos
+      // (?list=LL) - all the same page type.
+      matches: (pathname) => pathname === '/playlist',
       gridSelector:
         'ytd-playlist-video-list-renderer #contents, ytd-section-list-renderer #contents, ytd-browse #contents',
       // Three renderers because YouTube is mid-migration and ships whichever
@@ -160,6 +159,18 @@ window.__ytSummarizer = window.__ytSummarizer || {};
       thumbnailSelectors: THUMBNAIL_SELECTORS,
       buttonPlacement: 'meta',
       mountSelectors: META_SELECTORS,
+      getVideoId: extractVideoId,
+    },
+    // Watch history. Structurally identical to search - date-grouped sections
+    // of the same video renderer - so it takes the same selectors.
+    history: {
+      name: 'history',
+      kind: 'grid',
+      matches: (pathname) => pathname === '/feed/history',
+      gridSelector:
+        'ytd-section-list-renderer #contents.ytd-section-list-renderer, ytd-browse #contents',
+      cardSelector: 'ytd-video-renderer, yt-lockup-view-model',
+      thumbnailSelectors: THUMBNAIL_SELECTORS,
       getVideoId: extractVideoId,
     },
     // The watch page has no card grid: one video, and the summary belongs
@@ -228,10 +239,7 @@ window.__ytSummarizer = window.__ytSummarizer || {};
   // (single) and the related-videos rail (grid) - so this returns all matches.
   ns.getActiveSurfaces = function () {
     const path = location.pathname;
-    // The search string is passed as well because one surface is defined by it:
-    // /playlist?list=LL is Liked videos, which is deliberately not covered.
-    const search = typeof location !== 'undefined' ? location.search || '' : '';
-    return Object.values(ns.surfaces).filter((s) => s.matches(path, search));
+    return Object.values(ns.surfaces).filter((s) => s.matches(path));
   };
 
   ns.getCurrentSurface = function () {

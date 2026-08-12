@@ -81,7 +81,7 @@ makes billing, the counter and the crowd re-run all correct.
 there are no summaries at all. (An older version of this doc said the opposite —
 that was true before the key moved server-side.)
 
-## Surfaces (8, all live)
+## Surfaces (9, all live)
 
 | Surface | Path | Panel style |
 |---|---|---|
@@ -90,7 +90,8 @@ that was true before the key moved server-side.)
 | search | `/results` | inline accordion, under the result |
 | channel | `…/videos`, `…/streams` | inline accordion (rich grid, same as home) |
 | channelHome | `/@handle`, `…/featured` | inline accordion (horizontal shelves) |
-| playlist | `/playlist` (incl. Watch Later, **not** Liked) | inline accordion |
+| playlist | `/playlist` (incl. Watch Later and Liked) | inline accordion |
+| history | `/feed/history` | inline accordion |
 | watch | `/watch` | inline, under player above description |
 | related | `/watch` (sidebar rail) | popup, closes on outside click |
 
@@ -105,15 +106,17 @@ link, `getVideoId` returns null, `syncCardButton` skips them. Matching loosely
 and letting the id decide beats enumerating every renderer YouTube ships —
 that list would rot.
 
-Watch Later is not a surface: `/playlist?list=WL` is the same page type as any
-playlist, so the `playlist` entry covers it. **Liked videos (`?list=LL`) and
-History were removed** — both kept hitting `UNKNOWN_DURATION`, and neither was
-worth more selector work. Note that this hid a symptom rather than fixing the
-cause: with no `YOUTUBE_API_KEY` the server falls back to the client's scraped
-duration and refuses when the scrape is empty, which can happen on any surface.
-Setting the key is what actually fixes it. `matches()` takes the query string as
-a second argument purely so Liked can be excluded, since it shares a path with
-every other playlist.
+Watch Later and Liked videos are not surfaces: `/playlist?list=WL` and
+`?list=LL` are the same page type as any playlist, so the `playlist` entry
+covers both.
+
+Liked and History were briefly removed because they kept refusing with
+`UNKNOWN_DURATION`. That turned out to be `YOUTUBE_API_KEY` being unset, not a
+selector problem: without it the server falls back to the client's scraped
+duration and refuses whenever the scrape comes back empty — which can happen on
+any surface. With the key set the client's scrape is irrelevant, so both were
+restored. Worth remembering as a pattern: a failure that looks per-page can be a
+server-side config gap.
 
 **Card selectors are deliberately loose and list several renderers.** YouTube is
 mid-migration from Polymer renderers to lockup/view-model markup and ships
