@@ -58,10 +58,12 @@ if (missing.length) {
 console.log(`  manifest references ${referenced.length} files, all present`);
 CHECK
 
-# A key left in the manifest is fine for local development - it is what pins the
-# extension id - but the store assigns identity itself and warns about it.
+# A key in the manifest is required for local development - it is what pins the
+# extension id so OAuth keeps working - and is REJECTED outright by the store
+# ("key field is not allowed in manifest"). It is stripped from the package
+# below, not from the working tree.
 if node -p "!!require('./manifest.json').key" | grep -q true; then
-  echo "  note: manifest has a pinned key (expected; it fixes the extension id)"
+  echo "  note: manifest has a pinned key (kept for local dev, stripped from the package)"
 fi
 
 rm -rf dist/package "$OUT"
@@ -85,10 +87,27 @@ const path = 'dist/package/manifest.json';
 const m = JSON.parse(fs.readFileSync(path, 'utf8'));
 const before = (m.host_permissions || []).length;
 m.host_permissions = (m.host_permissions || []).filter((h) => !/localhost|127\.0\.0\.1/.test(h));
-fs.writeFileSync(path, JSON.stringify(m, null, 2) + '\n');
 console.log(
   `  host_permissions: ${before} -> ${m.host_permissions.length} (localhost stripped for release)`
 );
+
+// The store rejects an uploaded manifest that carries a key, and it assigns
+// identity from the developer account anyway. Locally the key is what keeps the
+// extension id - and therefore the OAuth redirect - stable, so it stays in the
+// working tree and only ever leaves the package.
+if (m.key) {
+  delete m.key;
+  console.log('  key: removed for release (the store rejects it; kept locally to pin the dev id)');
+}
+
+// The store caps the manifest description at 132 characters and refuses the
+// upload past it, after the upload rather than before.
+if ((m.description || '').length > 132) {
+  console.error(`  description is ${m.description.length} chars, the store allows 132`);
+  process.exit(1);
+}
+
+fs.writeFileSync(path, JSON.stringify(m, null, 2) + '\n');
 STRIP
 
 (cd dist/package && zip -qr "../$(basename "$OUT")" .)
