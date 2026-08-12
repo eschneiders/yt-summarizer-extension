@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Shared stats, votes and weekly quota for the YouTube Feed Summariser extension.",
+  "description": "Shared stats, votes and weekly quota for the Feed Summariser extension.",
   "engines": {
     "node": ">=22.5.0"
   },

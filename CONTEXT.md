@@ -1,4 +1,4 @@
-# YouTube Feed Summariser — context for a fresh session
+# Feed Summariser — context for a fresh session
 
 Paste this at the start of a new chat.
 
@@ -175,6 +175,16 @@ extension. I run those and paste results back. Give me exact things to look for.
 
 Private signing key is at `~/yts-secrets/extension-signing-key.pem`, outside the
 repo. **Losing it means losing the extension ID.**
+
+**The extension is called "Feed Summariser", not "YouTube Feed Summariser".**
+Google's brand guidelines forbid a third-party product name beginning with or
+dominated by "YouTube" — it implies endorsement, and it is a common Web Store
+rejection. Referential use in *copy* is fine and stays ("adds a Summarise button
+to YouTube video cards"); the name is what mattered. `terms.html` disclaims
+affiliation with YouTube and Google, which should stay. The repo, the Railway
+host and the Pages URL keep their old slugs on purpose: they are infrastructure,
+not branding, and the Pages URL is already registered as the OAuth consent
+screen's privacy-policy link.
 
 Railway environment: `DATABASE_URL`, `YTS_DATABASE_SSL=true`, `GEMINI_API_KEY`,
 `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `YOUTUBE_API_KEY`,
