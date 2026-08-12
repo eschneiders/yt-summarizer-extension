@@ -295,6 +295,44 @@ section('the allowance rolls over with the week');
   );
 }
 
+section('video length is per-plan, which is what a paid tier will sell');
+{
+  // 90 minutes: over the free ceiling of 60, under the paid one of 240.
+  const long = newVideoId();
+  await pool.query(
+    'INSERT INTO videos (video_id, first_seen_at, duration_seconds) VALUES ($1, $2, $3)',
+    [long, Date.now(), 90 * 60]
+  );
+  await writeSummary(long, 1, '# A long one\n\nBody.', 'test-model');
+
+  const free = await newUser('free');
+  const paid = await newUser('unlimited');
+
+  let done = (await stream(free, long, 60)).events.at(-1);
+  ok('a free account is refused', done.data.code === 'TOO_LONG', JSON.stringify(done.data));
+  ok('and told which limit it hit', done.data.limitSeconds === 3600, `limit=${done.data.limitSeconds}`);
+  ok('and how long the video actually was', done.data.durationSeconds === 5400);
+
+  done = (await stream(paid, long, 60)).events.at(-1);
+  ok('a paid account gets it', done.event === 'done' && done.data.ok === true, JSON.stringify(done.data));
+
+  // Past even the paid ceiling, nobody gets it - the cap is still a cost
+  // backstop, not only a paywall.
+  const huge = newVideoId();
+  await pool.query(
+    'INSERT INTO videos (video_id, first_seen_at, duration_seconds) VALUES ($1, $2, $3)',
+    [huge, Date.now(), 300 * 60]
+  );
+  done = (await stream(paid, huge, 60)).events.at(-1);
+  ok('nobody gets a five-hour video', done.data.code === 'TOO_LONG', JSON.stringify(done.data));
+
+  // Lowering the cap must not retroactively take away what someone already has.
+  ok(
+    'and a video already summarised stays open to its owner',
+    (await stream(paid, long, 60)).events.at(-1).data.ok === true
+  );
+}
+
 section('the unlimited plan');
 {
   const friend = await newUser('unlimited');

@@ -104,9 +104,21 @@ export const config = {
   // magnitude above real use, which is what a circuit breaker should be.
   dailySpendCapUsd: num(process.env.YTS_DAILY_SPEND_CAP_USD, 2),
 
-  // Videos longer than this are refused outright. Cost scales with length, so
-  // one stray three-hour podcast is the expensive mistake worth blocking.
-  maxVideoSeconds: num(process.env.YTS_MAX_VIDEO_SECONDS, 3600),
+  // Video length is the intended paid driver, so the ceiling is per-plan rather
+  // than global. The reasoning is not the obvious one: length is not sold
+  // because it is expensive - at ~92 min/cent a three-hour video costs about
+  // two cents - but because it is the one limit a second free account cannot
+  // get you past. Selling *quantity* would mean selling something both cheap to
+  // give away and trivially farmed by signing up again; selling *capability* is
+  // neither.
+  //
+  // YTS_FREE_MAX_VIDEO_MINUTES is meant to move. Somewhere in 20-40 is the
+  // interesting range, and where exactly is an empirical question about real
+  // demand - see the length-distribution query in CONTEXT.md. It stays at 60
+  // until there is something to upgrade *to*, because a wall with nothing
+  // behind it is just a worse product.
+  freeMaxVideoSeconds: num(process.env.YTS_FREE_MAX_VIDEO_MINUTES, 60) * 60,
+  plusMaxVideoSeconds: num(process.env.YTS_PLUS_MAX_VIDEO_MINUTES, 240) * 60,
 
   // Generations in flight per user. One was too strict: clicking a second card
   // while the first is still thinking is normal behaviour, not abuse, and it
@@ -119,6 +131,12 @@ export const config = {
   // so the summary gets stored and everyone after gets it free.
   maxConcurrentPerUser: num(process.env.YTS_MAX_CONCURRENT_PER_USER, 3),
 };
+
+// The longest video a given plan may summarise. Anything that is not 'free'
+// gets the higher ceiling, so a future 'plus' works without touching this.
+export function maxVideoSecondsFor(plan) {
+  return plan === 'free' || !plan ? config.freeMaxVideoSeconds : config.plusMaxVideoSeconds;
+}
 
 // Checked before anything connects to anything. A misconfigured deploy should
 // say what is wrong in its first log line, not throw a driver stack trace four

@@ -1,4 +1,4 @@
-import { config } from './config.js';
+import { config, maxVideoSecondsFor } from './config.js';
 import { summarizeYouTubeVideoStreaming, summarizeYouTubeVideo, MODEL } from './gemini.js';
 import { resolveDuration, DurationUnavailable } from './youtube.js';
 import { reportCritical, CRITICAL } from './digest.js';
@@ -97,10 +97,15 @@ export async function planSummary(videoId, auth, claimedSeconds) {
     );
   }
 
-  if (durationSeconds > config.maxVideoSeconds) {
+  // Per-plan, because length is what a paid tier will sell. A video already
+  // summarised by this user stays theirs and stays free to re-open even if the
+  // limit later drops below it - only new attempts meet the wall.
+  const lengthCap = maxVideoSecondsFor(auth.plan);
+  if (durationSeconds > lengthCap) {
     throw new SummariseError(
       'TOO_LONG',
-      `That video is longer than the ${Math.round(config.maxVideoSeconds / 60)} minute limit.`
+      `That video is longer than the ${Math.round(lengthCap / 60)} minute limit.`,
+      { limitSeconds: lengthCap, durationSeconds }
     );
   }
 

@@ -66,7 +66,7 @@ server/               Node, one dependency (`pg`)
   src/schema.sql      applied idempotently at boot
   src/notify.js       one Telegram sendMessage call, everything else calls this
   src/digest.js       daily report, spend alerts, critical-failure alerts
-  test/api.test.mjs   129 assertions against a live server
+  test/api.test.mjs   135 assertions against a live server
 ```
 
 Content scripts load in manifest order and share one `window.__ytSummarizer`
@@ -100,7 +100,7 @@ the click handler resolves the surface from that stamp, not from the pathname.
 **Server** (needs Postgres):
 ```bash
 createdb yts_test && cd server && npm install && npm start
-cd server && npm test      # 129 assertions, in another terminal
+cd server && npm test      # 135 assertions, in another terminal
 ```
 
 **Extension**: `chrome://extensions` → Developer mode → Load unpacked. The ID
@@ -137,6 +137,7 @@ repo. **Losing it means losing the extension ID.**
 Railway environment: `DATABASE_URL`, `YTS_DATABASE_SSL=true`, `GEMINI_API_KEY`,
 `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `YOUTUBE_API_KEY`,
 `YTS_DAILY_SPEND_CAP_USD=2`, `YTS_WEEKLY_QUOTA_MINUTES=400`,
+`YTS_FREE_MAX_VIDEO_MINUTES=60` (the paywall knob),
 `YTS_ALLOWED_ORIGINS=chrome-extension://ejijl…`,
 `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `PORT=8787`.
 
@@ -248,6 +249,52 @@ hard way:
   read-then-write — otherwise both instances read the same stale value and both
   act. See `claimSetting` in `db.js`, used by the digest, the spend alert, the
   incident alert and the quota warning.
+
+## Pricing: video length is the paid driver
+
+**$3/month or $30/year.** Annual matters more than it looks: Stripe's fixed
+~$0.25 is 8% of a $3 charge and is paid twelve times a year, so annual billing
+takes fee drag from ~8% to ~0.8% — nearly a month of revenue per subscriber for
+no product work.
+
+Per subscriber on $3 gross: −21% VAT, −Stripe (~1.5% + $0.25) leaves about
+**$2.18**, minus a few cents of Gemini. Railway's $5/month needs ~3 subscribers.
+Still ~70% margin, but not the 90% the raw Gemini cost suggests — VAT and the
+fixed fee are most of what goes.
+
+**Why length and not minutes.** Length is not sold because it is expensive — at
+~92 min/cent a three-hour video costs about 2c — but because it is the one limit
+a second free Google account cannot get past. Selling quantity would be selling
+something both cheap to give and trivially farmed by signing up again. This is
+also why the YouTube-account-matching idea was dropped: it would have cost weeks
+of sensitive-scope verification and a scarier consent screen to defend a paywall
+that should not have been built on minutes in the first place.
+
+Planned split: **free** keeps 400 min/week and gets a length ceiling somewhere
+in 20–40 min; **paid** gets long videos, priority and an archive. Not model
+quality — that raises unit cost, and there is no room for that at $3.
+
+`YTS_FREE_MAX_VIDEO_MINUTES` is the knob, a Railway variable, live on restart,
+no extension update needed (the server owns the rule; the client only sends a
+hint). **It stays at 60 until there is something to upgrade to** — a wall with
+nothing behind it is just a worse product.
+
+Pick the number from data, not taste. Every video anyone attempts has its real
+length cached, so this is the demand distribution:
+
+```sql
+SELECT count(*) FILTER (WHERE duration_seconds > 20*60) AS over_20,
+       count(*) FILTER (WHERE duration_seconds > 30*60) AS over_30,
+       count(*) FILTER (WHERE duration_seconds > 40*60) AS over_40,
+       count(*)                                          AS total
+FROM videos WHERE duration_seconds IS NOT NULL;
+```
+
+Still open before charging anyone: **VAT compliance route.** Stripe + Stripe Tax
+(~0.5%, calculates but you register for OSS and file yourself) versus a merchant
+of record like Paddle or Lemon Squeezy (~5% + fees, they are the seller and
+handle VAT entirely). At a handful of subscribers the MoR cut may well beat ever
+touching a VAT return.
 
 ## Guards on the money path, outermost first
 

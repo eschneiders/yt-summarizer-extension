@@ -485,9 +485,11 @@ maybeSendSpendAlert().catch((err) => console.warn('[yts:api] spend alert:', err.
 
 server.listen(config.port, () => {
   console.log(
-    '[yts:api] listening on http://localhost:%d · quota %d min/week · re-run at %d downvotes and %d%% down (max rev %d)',
+    '[yts:api] listening on http://localhost:%d · quota %d min/week · videos ≤%d min free, ≤%d min paid · re-run at %d downvotes and %d%% down (max rev %d)',
     config.port,
     config.weeklyQuotaSeconds / 60,
+    config.freeMaxVideoSeconds / 60,
+    config.plusMaxVideoSeconds / 60,
     config.downvoteMinimum,
     Math.round(config.downvoteRatio * 100),
     config.maxRevision
