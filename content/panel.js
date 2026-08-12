@@ -282,9 +282,11 @@ window.__ytSummarizer = window.__ytSummarizer || {};
     // No summary yet means no reading time - claiming "1 min read" over a
     // spinner would be inventing a number.
     const bits = summary ? [`${readingTimeMinutes(summary)} min read`] : [];
-    // Only shown when the service is reachable and someone else has actually
-    // been here - "0 others" is noise, and an unreachable service must not
-    // silently render as nobody having read it.
+    // Kept on purpose: "N others summarised this" is social proof, and it says
+    // nothing about who paid for what. What is deliberately never explained
+    // anywhere is the economics behind it - that a summary is written once and
+    // costs nothing to hand to everyone afterwards. Showing the count is fine;
+    // spelling out why some summaries are free to serve is not.
     const others = meta.stats && meta.stats.others;
     if (others > 0) {
       bits.push(others === 1 ? '1 other person summarised this' : `${others} others summarised this`);
