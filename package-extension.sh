@@ -74,6 +74,23 @@ done
 # macOS sprinkles these through any copied tree and they end up in the zip.
 find dist/package -name '.DS_Store' -delete
 
+# The localhost host permission exists so a developer can point the extension at
+# a local server through the Advanced setting. Nobody installing from the store
+# can use it, and a public extension asking for access to the user's own machine
+# is a reasonable thing for a reviewer to stop and ask about. Stripped from the
+# package only - the working tree keeps it, so local development is unaffected.
+node - <<'STRIP'
+const fs = require('fs');
+const path = 'dist/package/manifest.json';
+const m = JSON.parse(fs.readFileSync(path, 'utf8'));
+const before = (m.host_permissions || []).length;
+m.host_permissions = (m.host_permissions || []).filter((h) => !/localhost|127\.0\.0\.1/.test(h));
+fs.writeFileSync(path, JSON.stringify(m, null, 2) + '\n');
+console.log(
+  `  host_permissions: ${before} -> ${m.host_permissions.length} (localhost stripped for release)`
+);
+STRIP
+
 (cd dist/package && zip -qr "../$(basename "$OUT")" .)
 rm -rf dist/package
 
