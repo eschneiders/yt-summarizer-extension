@@ -112,6 +112,13 @@ window.__ytSummarizer = window.__ytSummarizer || {};
     // sweeps document.querySelectorAll on every pass, so a card revealed by
     // scrolling a carousel right gets its button on the next tick exactly like
     // one revealed by scrolling the page down.
+    //
+    // The button does NOT overlay the thumbnail on this surface. These cards
+    // are small enough that hovering one starts YouTube's inline preview
+    // immediately, and that preview does not merely cover the thumbnail - it
+    // replaces its contents, so an overlay button vanishes the instant the
+    // mouse arrives, wherever it was placed. Mounting into the title and
+    // view-count block puts it outside anything the preview touches.
     channelHome: {
       name: 'channelHome',
       kind: 'grid',
@@ -122,6 +129,17 @@ window.__ytSummarizer = window.__ytSummarizer || {};
       cardSelector:
         'ytd-grid-video-renderer, ytd-video-renderer, yt-lockup-view-model, ytd-rich-item-renderer',
       thumbnailSelectors: THUMBNAIL_SELECTORS,
+      buttonPlacement: 'meta',
+      // Tried in order, newest markup first. The last two are the card itself
+      // as a backstop, so the button still appears somewhere sensible if
+      // YouTube renames the metadata block again.
+      mountSelectors: [
+        '.yt-lockup-metadata-view-model__text-container',
+        '.yt-lockup-metadata-view-model',
+        'ytd-video-meta-block',
+        '#meta',
+        '#details',
+      ],
       getVideoId: extractVideoId,
     },
     // Watch history. Structurally identical to search - date-grouped sections

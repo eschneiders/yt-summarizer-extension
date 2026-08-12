@@ -32,7 +32,16 @@ window.__ytSummarizer = window.__ytSummarizer || {};
   // change shows up as a visible log rather than a mispositioned button.
   let reportedMount = false;
   function resolveMount(card, surface) {
-    for (const selector of surface.thumbnailSelectors) {
+    // Most surfaces overlay the thumbnail. A surface that asks for 'meta'
+    // placement mounts into the title/view-count block instead - the only way
+    // to survive YouTube's inline hover preview, which does not merely cover
+    // the thumbnail but replaces its contents, taking any overlay with it.
+    const selectors =
+      surface.buttonPlacement === 'meta' && surface.mountSelectors
+        ? surface.mountSelectors
+        : surface.thumbnailSelectors;
+
+    for (const selector of selectors) {
       const el = card.querySelector(selector);
       if (el) {
         if (!reportedMount) {
@@ -45,8 +54,8 @@ window.__ytSummarizer = window.__ytSummarizer || {};
     if (!reportedMount) {
       reportedMount = true;
       console.warn(
-        '[yts] no thumbnail container matched %o - falling back to the card, so the button will sit under the thumbnail instead of on it',
-        surface.thumbnailSelectors
+        '[yts] no mount container matched %o - falling back to the card, so the button will sit under the thumbnail instead of on it',
+        selectors
       );
     }
     return card;
@@ -66,6 +75,10 @@ window.__ytSummarizer = window.__ytSummarizer || {};
     // /watch runs two surfaces at once, so the button has to carry its own
     // rather than the click handler guessing from the pathname.
     if (surface) btn.setAttribute('data-yts-surface', surface.name);
+    // A surface can ask for the button to sit in the card's text block rather
+    // than floating on the thumbnail. It then needs to be a normal in-flow
+    // element instead of an absolutely positioned overlay.
+    if (surface && surface.buttonPlacement === 'meta') btn.classList.add('yts-in-meta');
     ns.applyIdleState(btn);
     btn.addEventListener('click', (e) => {
       e.preventDefault();

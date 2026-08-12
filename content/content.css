@@ -35,19 +35,34 @@
   overflow: hidden;
 }
 
-/* Channel home only. Its shelves are the one place the bottom-left position is
-   unusable: the cards are small, so YouTube's inline hover preview starts and
-   lays its scrubber across the bottom edge before the cursor has finished
-   travelling to the button - moving the mouse towards the button is what
-   triggers the preview that then swallows the click. z-index does not save it,
-   because the preview paints in its own stacking context.
+/* Channel home only: the button sits in the card's text block, under the
+   thumbnail, instead of floating on it. Hovering one of these small cards
+   starts YouTube's inline preview, which REPLACES the thumbnail's contents -
+   so an overlay button disappears the moment the mouse reaches it, at any
+   position and any z-index. Out of the thumbnail is the only place it survives.
 
-   Every other surface keeps the button bottom-left, where it belongs: this is
-   a workaround for one page, not a redesign. Buttons carry data-yts-surface
-   precisely so a fix can be scoped to the surface that needs it. */
-.yts-summarize-btn[data-yts-surface='channelHome'] {
-  top: 8px;
-  bottom: auto;
+   Every other surface keeps the overlay, where it belongs: this is a
+   workaround for one page, not a redesign. */
+.yts-summarize-btn.yts-in-meta {
+  position: static;
+  margin: 8px 0 4px;
+  padding: 5px 10px 5px 8px;
+  font-size: 11px;
+  background: rgba(255, 255, 255, 0.1);
+  max-width: 100%;
+}
+
+.yts-summarize-btn.yts-in-meta:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+html:not([dark]) .yts-summarize-btn.yts-in-meta {
+  background: rgba(0, 0, 0, 0.05);
+  color: #0f0f0f;
+}
+
+html:not([dark]) .yts-summarize-btn.yts-in-meta:hover {
+  background: rgba(0, 0, 0, 0.1);
 }
 
 .yts-summarize-btn > span {
