@@ -81,14 +81,21 @@ makes billing, the counter and the crowd re-run all correct.
 there are no summaries at all. (An older version of this doc said the opposite —
 that was true before the key moved server-side.)
 
-## Surfaces (4, all live)
+## Surfaces (5, all live)
 
 | Surface | Path | Panel style |
 |---|---|---|
 | home | `/` | inline accordion, full grid width |
 | subscriptions | `/feed/subscriptions` | inline accordion |
+| search | `/results` | inline accordion, under the result |
 | watch | `/watch` | inline, under player above description |
 | related | `/watch` (sidebar rail) | popup, closes on outside click |
+
+Search needed no code outside `surfaces.js` — one entry. A vertical list is
+just a grid where every row has one card, and non-video results (channels,
+playlists, Shorts, ads) fall out on their own because they carry no `/watch?v=`
+link, so `getVideoId` returns null and the card is skipped. Matching loosely and
+letting the id decide beats enumerating every renderer YouTube ships.
 
 `/watch` runs **two surfaces at once**, so buttons carry `data-yts-surface` and
 the click handler resolves the surface from that stamp, not from the pathname.

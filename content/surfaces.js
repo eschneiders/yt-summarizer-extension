@@ -51,6 +51,26 @@ window.__ytSummarizer = window.__ytSummarizer || {};
       thumbnailSelectors: THUMBNAIL_SELECTORS,
       getVideoId: extractVideoId,
     },
+    // Search results. A vertical list rather than a grid, which needs no
+    // special handling: the row logic in panel.js groups cards by vertical
+    // offset, and in a single column every card is its own row, so the panel
+    // lands directly under the result that was clicked.
+    //
+    // Results also contain channels, playlists, Shorts shelves and ads.
+    // None of those are filtered out here on purpose - they carry no
+    // /watch?v= link, so getVideoId returns null and syncCardButton skips
+    // them. Matching loosely and letting the id decide is more robust than
+    // trying to enumerate every non-video renderer YouTube ships.
+    search: {
+      name: 'search',
+      kind: 'grid',
+      matches: (pathname) => pathname === '/results',
+      gridSelector:
+        'ytd-section-list-renderer #contents.ytd-section-list-renderer, ytd-search #contents, #primary ytd-section-list-renderer',
+      cardSelector: 'ytd-video-renderer, yt-lockup-view-model',
+      thumbnailSelectors: THUMBNAIL_SELECTORS,
+      getVideoId: extractVideoId,
+    },
     // The watch page has no card grid: one video, and the summary belongs
     // directly under the player, above the description and comments. Tried in
     // order; whichever exists becomes the host for the button bar + panel.
