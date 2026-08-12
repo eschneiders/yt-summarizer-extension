@@ -92,8 +92,35 @@ window.__ytSummarizer = window.__ytSummarizer || {};
       name: 'playlist',
       kind: 'grid',
       matches: (pathname) => pathname === '/playlist',
-      gridSelector: 'ytd-playlist-video-list-renderer #contents, ytd-section-list-renderer #contents',
-      cardSelector: 'ytd-playlist-video-renderer',
+      gridSelector:
+        'ytd-playlist-video-list-renderer #contents, ytd-section-list-renderer #contents, ytd-browse #contents',
+      // Three renderers because YouTube is mid-migration and ships whichever
+      // it feels like: the classic playlist row, the plain video row, and the
+      // newer lockup. Matching all three is safe - anything without a
+      // /watch?v= link is skipped by getVideoId, including the playlist
+      // header's own "Play all" link, which is not one of these renderers.
+      cardSelector: 'ytd-playlist-video-renderer, ytd-video-renderer, yt-lockup-view-model',
+      thumbnailSelectors: THUMBNAIL_SELECTORS,
+      getVideoId: extractVideoId,
+    },
+    // A channel's home tab, which is shelves of horizontal carousels rather
+    // than a grid - "My most important videos", "Conversations with…". Matches
+    // the bare channel URL and its /featured form, in all four ways a channel
+    // can be addressed, but NOT /videos, which the channel surface above owns.
+    //
+    // Cards scroll sideways here, which needs nothing special: processGrid
+    // sweeps document.querySelectorAll on every pass, so a card revealed by
+    // scrolling a carousel right gets its button on the next tick exactly like
+    // one revealed by scrolling the page down.
+    channelHome: {
+      name: 'channelHome',
+      kind: 'grid',
+      matches: (pathname) =>
+        /^\/(@[^/]+|channel\/[^/]+|c\/[^/]+|user\/[^/]+)(\/featured)?\/?$/.test(pathname),
+      gridSelector:
+        'ytd-two-column-browse-results-renderer #contents, ytd-browse #contents, ytd-section-list-renderer #contents',
+      cardSelector:
+        'ytd-grid-video-renderer, ytd-video-renderer, yt-lockup-view-model, ytd-rich-item-renderer',
       thumbnailSelectors: THUMBNAIL_SELECTORS,
       getVideoId: extractVideoId,
     },

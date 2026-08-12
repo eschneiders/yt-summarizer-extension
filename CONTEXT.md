@@ -81,7 +81,7 @@ makes billing, the counter and the crowd re-run all correct.
 there are no summaries at all. (An older version of this doc said the opposite —
 that was true before the key moved server-side.)
 
-## Surfaces (8, all live)
+## Surfaces (9, all live)
 
 | Surface | Path | Panel style |
 |---|---|---|
@@ -89,6 +89,7 @@ that was true before the key moved server-side.)
 | subscriptions | `/feed/subscriptions` | inline accordion |
 | search | `/results` | inline accordion, under the result |
 | channel | `…/videos`, `…/streams` | inline accordion (rich grid, same as home) |
+| channelHome | `/@handle`, `…/featured` | inline accordion (horizontal shelves) |
 | playlist | `/playlist` (incl. Watch Later) | inline accordion |
 | history | `/feed/history` | inline accordion |
 | watch | `/watch` | inline, under player above description |
@@ -105,8 +106,16 @@ link, `getVideoId` returns null, `syncCardButton` skips them. Matching loosely
 and letting the id decide beats enumerating every renderer YouTube ships —
 that list would rot.
 
-Watch Later is not a surface: `/playlist?list=WL` is the same page type as any
-playlist, so the `playlist` entry covers it. `channel` matches on the path
+Watch Later and Liked videos are not surfaces: `/playlist?list=WL` and
+`?list=LL` are the same page type as any playlist, so the `playlist` entry
+covers both.
+
+**Card selectors are deliberately loose and list several renderers.** YouTube is
+mid-migration from Polymer renderers to lockup/view-model markup and ships
+whichever per page and per rollout — the first playlist attempt used only
+`ytd-playlist-video-renderer` and matched nothing, because that page had already
+moved to `yt-lockup-view-model`. Listing all plausible renderers costs nothing,
+because `getVideoId` skips anything without a `/watch?v=` link. `channel` matches on the path
 *ending* because a channel is reachable as `/@handle`, `/channel/UC…`, `/c/name`
 or `/user/name`, and all four end the same way.
 
