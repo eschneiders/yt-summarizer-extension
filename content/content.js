@@ -304,9 +304,14 @@
                 : null,
           // Said plainly, and in the same words on every one of these, because
           // "free" is the whole answer to "why should I hand over an account".
+          // Says what signing in costs you, not just what it gives you. The
+          // second sentence is the one people actually want answered before
+          // handing a YouTube tool their Google account, and leaving it to the
+          // privacy policy means leaving it unanswered.
           note: wantsAccount
             ? 'It’s free — no card, no trial. Signing in is only so one person ' +
-              'cannot use up the whole service.'
+              'cannot use up the whole service. It records which videos you ' +
+              'summarise, never what you watch.'
             : null,
           // Signing in is one click, so offer it here rather than sending
           // someone to the settings page to find it.

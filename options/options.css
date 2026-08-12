@@ -198,3 +198,17 @@ button.ghost {
 .legal a:hover {
   color: var(--fg);
 }
+
+/* The what-gets-stored note. Set apart from the surrounding hints with a rule
+   rather than a colour, so it reads as a plain statement of fact rather than a
+   warning - it is reassurance, and dressing it as an alert would undercut it. */
+.hint.stored {
+  border-left: 2px solid var(--border);
+  padding-left: 12px;
+  margin-top: 10px;
+}
+
+.hint.stored strong {
+  color: var(--fg);
+  font-weight: 600;
+}

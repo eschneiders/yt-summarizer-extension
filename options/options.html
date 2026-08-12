@@ -14,6 +14,19 @@
       <!-- Account first, because on a fresh install it is the only thing worth
            doing here. Everything else is either automatic or a one-off. -->
       <p class="hint" id="account">—</p>
+
+      <!-- Above the sign-in button on purpose. "What do you learn about me?" is
+           the first question anyone sensible asks when a tool that lives inside
+           YouTube wants their Google account, and the privacy policy is a
+           footer link nobody reads before pressing a button. Answering it at
+           the moment of the decision is worth the two extra sentences. -->
+      <p class="hint stored">
+        <strong>What gets stored:</strong> your Google email, and which videos you
+        press Summarise on. Never what you watch, search for, or scroll past — the
+        extension only learns about a video when you press the button. You can
+        delete all of it at any time.
+      </p>
+
       <div class="actions">
         <button id="signin" type="button">Sign in with Google</button>
         <button id="signout" type="button" class="ghost" hidden>Sign out</button>
