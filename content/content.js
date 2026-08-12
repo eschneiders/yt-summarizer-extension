@@ -420,7 +420,23 @@
   }
 
   function processGrid(surface) {
-    const cards = document.querySelectorAll(surface.cardSelector);
+    // Outermost matches only. YouTube nests its renderers - a
+    // ytd-rich-item-renderer contains a yt-lockup-view-model contains the
+    // thumbnail - and card selectors deliberately name several renderers so
+    // they survive the migration between them. The cost of that looseness is
+    // that one video can match twice, outer and inner, and each match mounts
+    // its own button into a different part of the card: two Summarise buttons
+    // on one video. Dropping any match that sits inside another match fixes it
+    // for every surface at once, rather than tuning selectors per page.
+    //
+    // closest() rather than comparing every pair: this runs on every sweep and
+    // on every scroll, so it walks up from each card instead of going
+    // quadratic over the whole feed.
+    const matched = document.querySelectorAll(surface.cardSelector);
+    const cards = Array.from(matched).filter(
+      (card) => !card.parentElement || !card.parentElement.closest(surface.cardSelector)
+    );
+
     noteSweepResult(surface, cards.length);
     let created = 0;
     cards.forEach((card) => {
