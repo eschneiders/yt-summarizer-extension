@@ -81,21 +81,42 @@ makes billing, the counter and the crowd re-run all correct.
 there are no summaries at all. (An older version of this doc said the opposite —
 that was true before the key moved server-side.)
 
-## Surfaces (5, all live)
+## Surfaces (8, all live)
 
 | Surface | Path | Panel style |
 |---|---|---|
 | home | `/` | inline accordion, full grid width |
 | subscriptions | `/feed/subscriptions` | inline accordion |
 | search | `/results` | inline accordion, under the result |
+| channel | `…/videos`, `…/streams` | inline accordion (rich grid, same as home) |
+| playlist | `/playlist` (incl. Watch Later) | inline accordion |
+| history | `/feed/history` | inline accordion |
 | watch | `/watch` | inline, under player above description |
 | related | `/watch` (sidebar rail) | popup, closes on outside click |
 
-Search needed no code outside `surfaces.js` — one entry. A vertical list is
-just a grid where every row has one card, and non-video results (channels,
-playlists, Shorts, ads) fall out on their own because they carry no `/watch?v=`
-link, so `getVideoId` returns null and the card is skipped. Matching loosely and
-letting the id decide beats enumerating every renderer YouTube ships.
+**Every one of these was one entry in `surfaces.js` and nothing else** — that
+file exists so adding a surface never touches the rest of the codebase.
+
+Two things that make it that cheap. A vertical list is just a grid where every
+row holds one card, so `panel.js`'s offset-grouping puts the panel directly
+under the clicked result with no special case. And non-video cards (channels,
+playlists, Shorts shelves, ads) need no filtering: they carry no `/watch?v=`
+link, `getVideoId` returns null, `syncCardButton` skips them. Matching loosely
+and letting the id decide beats enumerating every renderer YouTube ships —
+that list would rot.
+
+Watch Later is not a surface: `/playlist?list=WL` is the same page type as any
+playlist, so the `playlist` entry covers it. `channel` matches on the path
+*ending* because a channel is reachable as `/@handle`, `/channel/UC…`, `/c/name`
+or `/user/name`, and all four end the same way.
+
+Lazy loading is already handled and needs nothing per-surface: `processGrid`
+runs `document.querySelectorAll(cardSelector)` across the whole page on every
+pass, driven by a MutationObserver, a scroll listener and a 2s sweep. New cards
+get buttons whichever direction you scroll.
+
+Deliberately not surfaces: Shorts (a summary would be longer than the video),
+trending, and hashtag pages.
 
 `/watch` runs **two surfaces at once**, so buttons carry `data-yts-surface` and
 the click handler resolves the surface from that stamp, not from the pathname.

@@ -71,6 +71,44 @@ window.__ytSummarizer = window.__ytSummarizer || {};
       thumbnailSelectors: THUMBNAIL_SELECTORS,
       getVideoId: extractVideoId,
     },
+    // A channel's Videos tab (and Live, which is the same markup). Matched by
+    // the path ending rather than by handle, because a channel can be reached
+    // as /@handle, /channel/UC…, /c/name or /user/name and all four end the
+    // same way. The grid itself is the same rich-grid the home feed uses.
+    channel: {
+      name: 'channel',
+      kind: 'grid',
+      matches: (pathname) => /\/(videos|streams)\/?$/.test(pathname),
+      gridSelector: 'ytd-rich-grid-renderer #contents.ytd-rich-grid-renderer',
+      cardSelector: 'ytd-rich-item-renderer',
+      thumbnailSelectors: THUMBNAIL_SELECTORS,
+      getVideoId: extractVideoId,
+    },
+    // Playlists, which is also Watch Later: /playlist?list=WL is the same page
+    // type as any other list, so both are covered by this one entry. The
+    // decision being made here - "which of these forty is worth my time" - is
+    // the same one the feed surfaces serve, on a longer list.
+    playlist: {
+      name: 'playlist',
+      kind: 'grid',
+      matches: (pathname) => pathname === '/playlist',
+      gridSelector: 'ytd-playlist-video-list-renderer #contents, ytd-section-list-renderer #contents',
+      cardSelector: 'ytd-playlist-video-renderer',
+      thumbnailSelectors: THUMBNAIL_SELECTORS,
+      getVideoId: extractVideoId,
+    },
+    // Watch history. Structurally identical to search - date-grouped sections
+    // of the same video renderer - so it takes the same selectors.
+    history: {
+      name: 'history',
+      kind: 'grid',
+      matches: (pathname) => pathname === '/feed/history',
+      gridSelector:
+        'ytd-section-list-renderer #contents.ytd-section-list-renderer, ytd-browse #contents',
+      cardSelector: 'ytd-video-renderer, yt-lockup-view-model',
+      thumbnailSelectors: THUMBNAIL_SELECTORS,
+      getVideoId: extractVideoId,
+    },
     // The watch page has no card grid: one video, and the summary belongs
     // directly under the player, above the description and comments. Tried in
     // order; whichever exists becomes the host for the button bar + panel.
