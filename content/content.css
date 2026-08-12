@@ -6,8 +6,15 @@
 .yts-summarize-btn {
   position: absolute;
   left: 8px;
-  bottom: 8px;
-  z-index: 5;
+  /* Clear of the very bottom edge, which is where YouTube stacks the watched-
+     progress bar and the hover-preview scrubber. */
+  bottom: 12px;
+  /* Was 5, which lost to YouTube's inline hover preview: moving the mouse onto
+     the button is itself what starts the preview, so the preview rendered on
+     top of the thing you were reaching for and swallowed the click. The button
+     has to outrank anything YouTube paints inside a thumbnail. */
+  z-index: 3000;
+  pointer-events: auto;
   display: inline-flex;
   align-items: center;
   gap: 5px;

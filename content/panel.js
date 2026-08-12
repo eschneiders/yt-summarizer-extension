@@ -330,6 +330,26 @@ window.__ytSummarizer = window.__ytSummarizer || {};
   // The video element for `videoId`, but only when that video is the one
   // actually playing on this page. The related rail shows summaries for other
   // videos, and seeking the player for one of those would jump the wrong film.
+  // The page's real player, not merely the first <video> in the document.
+  // A watch page usually holds several: the main player, plus a hover-preview
+  // player for whichever card in the sidebar the mouse last passed over. The
+  // preview is often earlier in the DOM, so `querySelector('video')` returned
+  // it, its duration was NaN, and the seek gave up and opened a new tab
+  // instead - which is exactly the bug this fixes.
+  ns.mainPlayer = function () {
+    const candidates = [
+      '#movie_player video.html5-main-video',
+      '#movie_player video',
+      'video.html5-main-video',
+      '.html5-video-player video',
+    ];
+    for (const selector of candidates) {
+      const video = document.querySelector(selector);
+      if (video) return video;
+    }
+    return null;
+  };
+
   function playerFor(videoId) {
     if (location.pathname !== '/watch') return null;
     let playing = null;
@@ -339,8 +359,12 @@ window.__ytSummarizer = window.__ytSummarizer || {};
       return null;
     }
     if (playing !== videoId) return null;
-    const video = document.querySelector('video');
-    return video && isFinite(video.duration) ? video : null;
+
+    // Deliberately no isFinite(duration) gate any more. Once the right player
+    // is identified, seeking it is always better than opening a second copy of
+    // a video already on screen - and duration can read NaN for a moment even
+    // on the main player, which made this fail intermittently.
+    return ns.mainPlayer();
   }
 
   function makeChip(label, videoId) {

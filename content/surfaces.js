@@ -158,7 +158,10 @@ window.__ytSummarizer = window.__ytSummarizer || {};
       },
       // The player itself is the most reliable duration source on this page.
       getDurationSeconds: () => {
-        const video = document.querySelector('video');
+        // ns.mainPlayer, not the first <video> on the page: a watch page also
+        // holds a hover-preview player for whatever the mouse last touched in
+        // the sidebar, and reading its duration would report the wrong length.
+        const video = ns.mainPlayer ? ns.mainPlayer() : document.querySelector('video');
         if (video && isFinite(video.duration) && video.duration > 0) {
           return Math.round(video.duration);
         }
