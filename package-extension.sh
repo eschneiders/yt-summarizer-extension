@@ -113,6 +113,42 @@ STRIP
 (cd dist/package && zip -qr "../$(basename "$OUT")" .)
 rm -rf dist/package
 
+# ---------------------------------------------------------------------------
+# The sideload build, served from the website so friends can install before the
+# store listing is live.
+#
+# It is NOT the store package, and the difference matters: the store rejects a
+# manifest carrying a key, but an unpacked install without one gets a random
+# extension id derived from its folder path. That id is not in
+# YTS_ALLOWED_ORIGINS and not a registered OAuth redirect, so the extension
+# would be dead on arrival - every request 403, sign-in impossible - while
+# working perfectly on the developer's machine. So this one keeps the key.
+#
+# Fixed filename on purpose: the download link on the site never changes, so
+# re-running this script republishes without touching any HTML.
+SIDELOAD="docs/feed-summariser.zip"
+rm -rf dist/sideload "$SIDELOAD"
+mkdir -p dist/sideload
+
+for path in "${INCLUDE[@]}"; do
+  cp -R "$path" dist/sideload/
+done
+find dist/sideload -name '.DS_Store' -delete
+
+node - <<'SIDE'
+const fs = require('fs');
+const path = 'dist/sideload/manifest.json';
+const m = JSON.parse(fs.readFileSync(path, 'utf8'));
+// Key stays - it is what pins the extension id. It is the *public* key; the
+// private one lives outside the repo and is not needed to load unpacked.
+m.host_permissions = (m.host_permissions || []).filter((h) => !/localhost|127\.0\.0\.1/.test(h));
+fs.writeFileSync(path, JSON.stringify(m, null, 2) + '\n');
+console.log('  sideload build: key kept (pins the id), localhost stripped');
+SIDE
+
+(cd dist/sideload && zip -qr "../../$SIDELOAD" .)
+rm -rf dist/sideload
+
 echo
 echo "  $OUT  ($(du -h "$OUT" | cut -f1))"
 echo
@@ -121,5 +157,7 @@ echo
 echo "Contents:"
 unzip -Z1 "$OUT" | grep -v '/$' | sort | sed 's/^/  /'
 
+echo
+echo "  $SIDELOAD  ($(du -h "$SIDELOAD" | cut -f1))  <- served from the website"
 echo
 echo "Upload at https://chrome.google.com/webstore/devconsole"
