@@ -310,8 +310,8 @@
           // privacy policy means leaving it unanswered.
           note: wantsAccount
             ? 'It’s free — no card, no trial. Signing in is only so one person ' +
-              'cannot use up the whole service. It records which videos you ' +
-              'summarise, never what you watch.'
+              'cannot use up the whole service. It only knows which videos you ' +
+              'clicked Summarise on.'
             : null,
           // Signing in is one click, so offer it here rather than sending
           // someone to the settings page to find it.

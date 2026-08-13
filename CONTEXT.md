@@ -211,11 +211,17 @@ screen's privacy-policy link.
 
 Railway environment: `DATABASE_URL`, `YTS_DATABASE_SSL=true`, `GEMINI_API_KEY`,
 `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `YOUTUBE_API_KEY`,
-`YTS_DAILY_SPEND_CAP_USD=2`, `YTS_WEEKLY_QUOTA_MINUTES=600`,
-`YTS_FREE_MAX_VIDEO_MINUTES=90` (the paywall knob — deliberately generous
-during testing; the eventual free tier is meant to land at 20–40),
-`YTS_ALLOWED_ORIGINS=chrome-extension://ejijl…`,
+`YTS_DAILY_SPEND_CAP_USD`, `YTS_WEEKLY_QUOTA_MINUTES`,
+`YTS_FREE_MAX_VIDEO_MINUTES`, `YTS_ALLOWED_ORIGINS=chrome-extension://ejijl…`,
 `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `PORT=8787`.
+
+**The Railway variables are the single source of truth for every limit.** The
+three tuning knobs above — daily spend cap, weekly quota minutes, free video
+length ceiling — are changed by hand as testing goes on, so this document
+deliberately does not name their values: any number written here would be wrong
+within the week. Read the current values off Railway (or the server's startup
+log) before reasoning about, quoting, or changing a limit, and never treat a
+number found elsewhere in the repo as authoritative.
 
 Cost: ~$5/mo Railway, $0 Neon free tier, $0 Pages, plus a few dollars of Gemini.
 
@@ -346,14 +352,13 @@ also why the YouTube-account-matching idea was dropped: it would have cost weeks
 of sensitive-scope verification and a scarier consent screen to defend a paywall
 that should not have been built on minutes in the first place.
 
-Planned split: **free** keeps 400 min/week and gets a length ceiling somewhere
-in 20–40 min; **paid** gets long videos, priority and an archive. Not model
+Planned split: **free** keeps its weekly minutes and gets a video-length
+ceiling; **paid** gets long videos, priority and an archive. Not model
 quality — that raises unit cost, and there is no room for that at $3.
 
 `YTS_FREE_MAX_VIDEO_MINUTES` is the knob, a Railway variable, live on restart,
 no extension update needed (the server owns the rule; the client only sends a
-hint). **It stays at 60 until there is something to upgrade to** — a wall with
-nothing behind it is just a worse product.
+hint). It moves around during testing — see the note under Deployment.
 
 Pick the number from data, not taste. Every video anyone attempts has its real
 length cached, so this is the demand distribution:
@@ -385,10 +390,11 @@ In `server/src/summarise.js`, in this order and for this reason:
 1. **Unknown/zero duration** → refuse. Can't be metered, must not be served.
    Also catches live streams, which report `P0D`, and deleted or private videos,
    which YouTube returns nothing for.
-2. **Video length cap** (60 min).
-3. **Weekly quota** — skipped for `plan = 'unlimited'`.
+2. **Video length cap** (`YTS_FREE_MAX_VIDEO_MINUTES`).
+3. **Weekly quota** (`YTS_WEEKLY_QUOTA_MINUTES`) — skipped for
+   `plan = 'unlimited'`.
 4. **Existing summary?** → serve it, bill the reader, never call Gemini.
-5. **Daily spend cap** ($2, rolling 24h) — read fresh from Postgres immediately
+5. **Daily spend cap** (`YTS_DAILY_SPEND_CAP_USD`, rolling 24h) — read fresh from Postgres immediately
    before every call, never cached. It's the thing standing between a bug and a
    bill, and it has to hold precisely when something has gone wrong.
 6. Service key present, one generation in flight per user.
