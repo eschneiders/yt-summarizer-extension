@@ -3,6 +3,7 @@ import {
   getSetting,
   claimSetting,
   readDigestStats,
+  readDigestPeople,
   spendSince,
   recordIncident,
   readIncidents,
@@ -128,9 +129,39 @@ export function measuredUsd(durationSeconds, minutesPerCent = config.measuredMin
   return durationSeconds / 60 / minutesPerCent / 100;
 }
 
+// Telegram rejects a message over 4096 characters outright, so an unbounded
+// list is a report that stops arriving on exactly the busy day it was most
+// worth reading. 25 names is far past the point where reading them one by one
+// is how you decide who to ask for feedback, which is the only reason the
+// lists exist - past that a count is the more useful answer anyway.
+const MAX_LISTED = 25;
+
+// An account with no email is possible (the column is nullable) and should
+// still occupy a line - a missing address is itself worth noticing.
+const who = (email) => email || '(no email on file)';
+
+function listed(items) {
+  const lines = items.slice(0, MAX_LISTED).map((text) => `  ${text}`);
+  if (items.length > MAX_LISTED) {
+    lines.push(`  …and ${items.length - MAX_LISTED} more`);
+  }
+  return lines;
+}
+
 // Exported and kept free of any I/O so it can be tested against fixed input
 // rather than against whatever happens to be in the database right now.
-export function formatDigest(day, stats, cap = config.dailySpendCapUsd, incidents = []) {
+//
+// `people` is optional and the report is complete without it: the counts are
+// the report, the names are an affordance for while the user list is small
+// enough to know personally. Callers that have no names still get a valid
+// message, which is what keeps the existing tests honest.
+export function formatDigest(
+  day,
+  stats,
+  cap = config.dailySpendCapUsd,
+  incidents = [],
+  people = null
+) {
   const minutes = Math.round(stats.duration_seconds / 60);
   const real = measuredUsd(stats.duration_seconds);
 
@@ -138,8 +169,19 @@ export function formatDigest(day, stats, cap = config.dailySpendCapUsd, incident
     `YTS daily report — ${day} (UTC)`,
     `Spend: ~${money(real)} · ${stats.generations} generation${stats.generations === 1 ? '' : 's'} · ${minutes} min of video`,
     `New sign-ups: ${stats.new_users}`,
-    `Opened: ${stats.reads} by ${stats.active_readers} ${stats.active_readers === 1 ? 'person' : 'people'}`,
   ];
+
+  if (people && people.signups.length) {
+    lines.push(...listed(people.signups.map(who)));
+  }
+
+  lines.push(
+    `Opened: ${stats.reads} by ${stats.active_readers} ${stats.active_readers === 1 ? 'person' : 'people'}`
+  );
+
+  if (people && people.readers.length) {
+    lines.push(...listed(people.readers.map((r) => `${who(r.email)} (${r.reads})`)));
+  }
 
   // The cap counts in list-price dollars, which run ~4x the real rate. Shown
   // only once it is worth knowing, so a quiet day stays a three-line message -
@@ -183,15 +225,16 @@ export async function maybeSendDailyDigest(now = Date.now()) {
   // value of this message is that it is worth reading when it arrives.
   if (!(await claimSetting('digest_last_day', yesterday.key))) return;
 
-  const [stats, incidents] = await Promise.all([
+  const [stats, incidents, people] = await Promise.all([
     readDigestStats(yesterday.startMs, yesterday.endMs),
     readIncidents(yesterday.key),
+    readDigestPeople(yesterday.startMs, yesterday.endMs),
   ]);
   // No activity means nothing to report and nobody to bother - explicitly
   // asked for, and it is also just the right default for a cost report.
   if (!hadActivity(stats, incidents)) return;
 
-  await notify(formatDigest(yesterday.key, stats, config.dailySpendCapUsd, incidents));
+  await notify(formatDigest(yesterday.key, stats, config.dailySpendCapUsd, incidents, people));
 }
 
 // ---------- spend alerts ----------

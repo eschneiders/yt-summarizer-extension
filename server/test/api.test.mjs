@@ -19,6 +19,7 @@ import {
   getSetting,
   setSetting,
   readDigestStats,
+  readDigestPeople,
   claimSetting,
   recordIncident,
   readIncidents,
@@ -637,6 +638,99 @@ section('daily digest and spend alerts');
         capped_usd: 0, duration_seconds: 0, generations: 0, new_users: 0, reads: 1, active_readers: 1,
       }).includes('1 person')
   );
+
+  // The report is read to decide who to go and ask for feedback, so the names
+  // have to survive formatting exactly - a count is not a substitute.
+  ok(
+    'lists who signed up and who read, with a read count each',
+    formatDigest(
+      '2026-08-11',
+      { capped_usd: 0, duration_seconds: 600, generations: 1, new_users: 1, reads: 12, active_readers: 2 },
+      2,
+      [],
+      {
+        signups: ['new@example.com'],
+        readers: [
+          { email: 'alice@example.com', reads: 9 },
+          { email: 'bob@example.com', reads: 3 },
+        ],
+      }
+    ) ===
+      'YTS daily report — 2026-08-11 (UTC)\n' +
+        'Spend: ~0.1c · 1 generation · 10 min of video\n' +
+        'New sign-ups: 1\n' +
+        '  new@example.com\n' +
+        'Opened: 12 by 2 people\n' +
+        '  alice@example.com (9)\n' +
+        '  bob@example.com (3)'
+  );
+
+  // Telegram rejects a message over 4096 characters, so an uncapped list is a
+  // report that stops arriving on the busiest day.
+  {
+    const many = formatDigest(
+      '2026-08-11',
+      { capped_usd: 0, duration_seconds: 0, generations: 0, new_users: 30, reads: 0, active_readers: 0 },
+      2,
+      [],
+      { signups: Array.from({ length: 30 }, (_, i) => `u${i}@example.com`), readers: [] }
+    );
+    ok(
+      'caps a long list rather than risking a message Telegram will refuse',
+      many.includes('  u24@example.com') &&
+        !many.includes('u25@example.com') &&
+        many.includes('…and 5 more')
+    );
+  }
+
+  ok(
+    'an account with no email still occupies a line',
+    formatDigest(
+      '2026-08-11',
+      { capped_usd: 0, duration_seconds: 0, generations: 0, new_users: 1, reads: 0, active_readers: 0 },
+      2,
+      [],
+      { signups: [null], readers: [] }
+    ).includes('(no email on file)')
+  );
+
+  // Omitting the names entirely must still produce a valid report - every
+  // other formatDigest test in this file calls it the old way.
+  ok(
+    'the report is complete without any names at all',
+    formatDigest('2026-08-11', {
+      capped_usd: 0, duration_seconds: 600, generations: 1, new_users: 0, reads: 1, active_readers: 1,
+    }).split('\n').length === 4
+  );
+
+  // The SQL, against real rows: a signup and a read inside the window show up,
+  // and one outside it does not.
+  {
+    const seen = await newUser();
+    const windowStart = Date.now() - 60_000;
+    await pool.query(
+      `INSERT INTO views (video_id, user_id, created_at) VALUES ($1, $2, $3), ($4, $2, $3)`,
+      ['digest-people-a', seen.userId, Date.now(), 'digest-people-b']
+    );
+    const people = await readDigestPeople(windowStart, Date.now() + 60_000);
+    ok(
+      'readDigestPeople returns the signup and the reader with a count',
+      people.signups.includes(`${seen.userId}@example.test`) &&
+        people.readers.some((r) => r.email === `${seen.userId}@example.test` && r.reads === 2),
+      JSON.stringify(people).slice(0, 200)
+    );
+
+    const empty = await readDigestPeople(windowStart - DAY_MS, windowStart - 1000);
+    ok(
+      'and nobody from outside the window',
+      !empty.signups.includes(`${seen.userId}@example.test`) &&
+        !empty.readers.some((r) => r.email === `${seen.userId}@example.test`)
+    );
+
+    await pool.query('DELETE FROM views WHERE user_id = $1', [seen.userId]);
+    await pool.query('DELETE FROM sessions WHERE user_id = $1', [seen.userId]);
+    await pool.query('DELETE FROM users WHERE user_id = $1', [seen.userId]);
+  }
 
   // maybeSendDailyDigest/maybeSendSpendAlert both no-op without Telegram
   // configured, which is exactly the state this test suite runs in - so what

@@ -525,6 +525,46 @@ export async function readDigestStats(startMs, endMs) {
   return rows[0];
 }
 
+/**
+ * Who those counts were, not just how many.
+ *
+ * At this size the report is read to work out which friend to go and ask for
+ * feedback, and "3 people opened something" cannot answer that. This stops
+ * being appropriate the moment the user list is strangers rather than people
+ * who know they are testing it - it is a deliberate small-scale affordance,
+ * not a permanent feature, and formatDigest caps the lists so it degrades into
+ * a count rather than a wall of text if that is forgotten.
+ */
+export async function readDigestPeople(startMs, endMs) {
+  const [signups, readers] = await Promise.all([
+    pool.query(
+      `SELECT email FROM users
+        WHERE created_at >= $1 AND created_at < $2
+        ORDER BY created_at`,
+      [startMs, endMs]
+    ),
+    // Inner join is safe: deleteUserData drops a user's views in the same
+    // transaction as the row, so a view cannot outlive the account it came
+    // from and no reader can go missing from this list by being deleted.
+    //
+    // Grouped by user_id rather than email because email is nullable and not
+    // unique - grouping by it would silently merge two accounts into one line.
+    pool.query(
+      `SELECT u.email, COUNT(*)::int AS reads
+         FROM views v
+         JOIN users u ON u.user_id = v.user_id
+        WHERE v.created_at >= $1 AND v.created_at < $2
+        GROUP BY u.user_id, u.email
+        ORDER BY COUNT(*) DESC, u.email`,
+      [startMs, endMs]
+    ),
+  ]);
+  return {
+    signups: signups.rows.map((r) => r.email),
+    readers: readers.rows.map((r) => ({ email: r.email, reads: r.reads })),
+  };
+}
+
 // ---------- spend ----------
 
 export async function logGeminiCall({
