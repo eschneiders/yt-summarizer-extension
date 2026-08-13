@@ -35,6 +35,7 @@ import {
   maybeSendDailyDigest,
   maybeSendSpendAlert,
   maybeWarnYoutubeQuota,
+  sendUpdateReport,
 } from '../src/digest.js';
 
 const BASE = process.env.YTS_TEST_BASE || 'http://localhost:8787';
@@ -732,6 +733,19 @@ section('daily digest and spend alerts');
     await pool.query('DELETE FROM users WHERE user_id = $1', [seen.userId]);
   }
 
+  // sendUpdateReport is what /update calls - unlike maybeSendDailyDigest it
+  // has no "was there any activity" gate and no once-a-day claim, so calling
+  // it twice in a row must not throw or leave settings in an odd state. A try
+  // block here rather than a bare call, so a real failure shows as one FAIL
+  // line instead of aborting every test after it.
+  try {
+    await sendUpdateReport();
+    await sendUpdateReport();
+    ok('sendUpdateReport runs against real data without throwing, repeatedly', true);
+  } catch (err) {
+    ok('sendUpdateReport runs against real data without throwing, repeatedly', false, err.message);
+  }
+
   // maybeSendDailyDigest/maybeSendSpendAlert both no-op without Telegram
   // configured, which is exactly the state this test suite runs in - so what
   // is actually exercised here is that "no token" means "does nothing", not
@@ -908,6 +922,28 @@ section('the extension can report that YouTube changed');
   ok('and it is not an open endpoint', anon.status === 401);
 
   await pool.query('DELETE FROM incidents WHERE kind = $1', ['youtube-layout-changed']);
+}
+
+// ------------------------------------------------------------- telegram bot
+
+section('the /update command');
+{
+  // TELEGRAM_WEBHOOK_SECRET is unset in this test environment, same as a
+  // fresh clone or a Railway deploy before the variable is added - so this is
+  // the honest default the route ships with, not a special test-only state.
+  // The point of asserting 404 rather than 401 is that it proves the route is
+  // handled ahead of the identify() gate: Telegram has no session token to
+  // send, and a 401 here would mean every webhook call was being rejected as
+  // an unauthenticated extension user instead.
+  const res = await fetch(`${BASE}/v1/telegram/webhook`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message: { chat: { id: 1 }, text: '/update' } }),
+  });
+  ok(
+    'without TELEGRAM_WEBHOOK_SECRET configured, the route 404s rather than treating this as a signed-out user',
+    res.status === 404
+  );
 }
 
 // ------------------------------------------------------------------ rejects

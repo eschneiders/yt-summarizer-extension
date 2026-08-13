@@ -55,6 +55,14 @@ export const config = {
   telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || '',
   telegramChatId: process.env.TELEGRAM_CHAT_ID || '',
 
+  // Gates POST /v1/telegram/webhook, which is what lets /update ask for
+  // today's report on demand rather than waiting for the nightly one. Set
+  // when registering the webhook with Telegram (secret_token on setWebhook)
+  // and never sent anywhere else, so a request without the matching header
+  // could not have come from Telegram. Optional - unset and the route 404s,
+  // same "quieter, not broken" default as the other two Telegram variables.
+  telegramWebhookSecret: process.env.TELEGRAM_WEBHOOK_SECRET || '',
+
   // YouTube Data API v3, used for one thing: deciding how long a video is
   // instead of believing the client. Same Google Cloud project as the Gemini
   // key, different API - enable "YouTube Data API v3" on it. Without this the
@@ -190,6 +198,11 @@ export function validateConfig() {
   if (!config.telegramBotToken || !config.telegramChatId) {
     console.warn(
       '[yts:api] TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID not both set - no daily report, no spend alerts.'
+    );
+  } else if (!config.telegramWebhookSecret) {
+    console.warn(
+      '[yts:api] TELEGRAM_WEBHOOK_SECRET not set - the daily report and spend alerts still work, ' +
+        'but /update in Telegram does nothing until it is set and the webhook is registered.'
     );
   }
   if (!config.youtubeApiKey) {

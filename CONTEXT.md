@@ -213,7 +213,9 @@ Railway environment: `DATABASE_URL`, `YTS_DATABASE_SSL=true`, `GEMINI_API_KEY`,
 `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `YOUTUBE_API_KEY`,
 `YTS_DAILY_SPEND_CAP_USD`, `YTS_WEEKLY_QUOTA_MINUTES`,
 `YTS_FREE_MAX_VIDEO_MINUTES`, `YTS_ALLOWED_ORIGINS=chrome-extension://ejijl…`,
-`TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `PORT=8787`.
+`TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `TELEGRAM_WEBHOOK_SECRET`
+(see "The Telegram bot also listens now" — needed for `/update`, not for the
+nightly digest or spend alerts), `PORT=8787`.
 
 **The Railway variables are the single source of truth for every limit.** The
 three tuning knobs above — daily spend cap, weekly quota minutes, free video
@@ -315,6 +317,59 @@ To hand a problem to a coding agent:
 ```sql
 SELECT day, kind, count, sample FROM incidents ORDER BY last_at DESC LIMIT 20;
 ```
+
+## The Telegram bot also listens now
+
+Three things, added August 2026 while the user base is a handful of friends:
+
+**The nightly digest and `/update` name names.** Both list who signed up and
+who read that day, each reader with a count, via `readDigestPeople` in `db.js`.
+At this size the report exists to answer "who do I go and ask for feedback" —
+"4 people opened something" cannot answer that, an email address can. The
+lists cap at 25 and degrade to a count past that (Telegram hard-rejects a
+message over 4096 characters), and this is written down as **deliberately
+temporary** in the code comment on `readDigestPeople`: somewhere around 20
+users the names stop being people the operator knows and the count becomes
+the more useful answer. Revisit then, not before. The privacy policy
+discloses this — see "Who it is shared with" in `privacy.html` — and that
+disclosure is the part that must not be trimmed even if the wording around it
+changes.
+
+**`/update`, sent to the bot, replies with today's report so far** — same
+shape as the nightly one, UTC day to the current moment rather than the day
+that just ended, and unlike the nightly digest it always replies, because
+someone asked. Built as a webhook (`POST /v1/telegram/webhook` in `index.js`),
+not polling: the server is already an always-on HTTP endpoint, so polling
+would be a second network loop bought for nothing. Two gates before anything
+runs, because the route sits ahead of the `identify()` session check (Telegram
+has no session token to send) and is otherwise reachable by anyone who finds
+the URL: the `X-Telegram-Bot-Api-Secret-Token` header must match
+`TELEGRAM_WEBHOOK_SECRET`, checked with `timingSafeEqual`, and the message's
+`chat.id` must match `TELEGRAM_CHAT_ID` — any Telegram user can open a DM with
+a public bot, so the secret alone is not enough. **Needs a one-time
+registration Telegram itself has no UI for:**
+
+```bash
+curl "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook" \
+  -d "url=https://yt-summarizer-extension-production.up.railway.app/v1/telegram/webhook" \
+  -d "secret_token=$TELEGRAM_WEBHOOK_SECRET"
+```
+
+Run once after `TELEGRAM_WEBHOOK_SECRET` is generated and set on Railway.
+Until both that variable and the registration exist, the route 404s and
+`/update` does nothing — same "quieter, not broken" default as the other two
+Telegram variables, and the startup log says so.
+
+**A sign-up fires an instant ping** — `New sign-up: {email}` from
+`signInWithGoogle` in `auth.js`, the moment `INSERT ... ON CONFLICT` lands on
+the insert branch rather than the update branch (detected by comparing the
+returned `created_at` to the `now` just written — true only the first time an
+account is ever created, exactly the test `readDigestStats` already uses to
+count "new sign-ups" for a window, here applied to a window of one moment).
+**Explicitly temporary, marked as such in the code**: worth an instant ping
+while sign-ups are rare enough to be news. Remove it once they are not — the
+daily and on-demand reports already count new sign-ups, so nothing is lost by
+dropping this later.
 
 ## Deploying without breaking the instance already running
 

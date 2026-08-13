@@ -148,25 +148,21 @@ function listed(items) {
   return lines;
 }
 
-// Exported and kept free of any I/O so it can be tested against fixed input
-// rather than against whatever happens to be in the database right now.
+// The line-building shared by the nightly digest and /update - everything
+// about the two that isn't the header. Kept free of any I/O so it can be
+// tested against fixed input rather than against whatever happens to be in
+// the database right now.
 //
 // `people` is optional and the report is complete without it: the counts are
 // the report, the names are an affordance for while the user list is small
 // enough to know personally. Callers that have no names still get a valid
 // message, which is what keeps the existing tests honest.
-export function formatDigest(
-  day,
-  stats,
-  cap = config.dailySpendCapUsd,
-  incidents = [],
-  people = null
-) {
+function formatReport(header, stats, cap, incidents, people) {
   const minutes = Math.round(stats.duration_seconds / 60);
   const real = measuredUsd(stats.duration_seconds);
 
   const lines = [
-    `YTS daily report — ${day} (UTC)`,
+    header,
     `Spend: ~${money(real)} · ${stats.generations} generation${stats.generations === 1 ? '' : 's'} · ${minutes} min of video`,
     `New sign-ups: ${stats.new_users}`,
   ];
@@ -201,6 +197,19 @@ export function formatDigest(
     }
   }
   return lines.join('\n');
+}
+
+// Exported wrapper kept to its original signature and output - every existing
+// call site and test passes a day string and gets back exactly what it always
+// did.
+export function formatDigest(
+  day,
+  stats,
+  cap = config.dailySpendCapUsd,
+  incidents = [],
+  people = null
+) {
+  return formatReport(`YTS daily report — ${day} (UTC)`, stats, cap, incidents, people);
 }
 
 function hadActivity(stats, incidents) {
@@ -290,4 +299,34 @@ export async function maybeSendSpendAlert(now = Date.now()) {
     const window = await readDigestStats(now - DAY_MS, now);
     await notify(current.describe(spent, cap, measuredUsd(window.duration_seconds)));
   }
+}
+
+// ---------- /update ----------
+
+/**
+ * Same shape as the nightly digest, for the UTC day so far rather than the
+ * one that just ended. Always sends - unlike maybeSendDailyDigest, someone
+ * asked for this one, so "nothing happened yet today" is itself the answer,
+ * not a reason to stay quiet.
+ *
+ * Takes no lock and claims no setting: this runs once, on request, not on a
+ * poll every instance shares, so there is nothing to race.
+ */
+export async function sendUpdateReport(now = Date.now()) {
+  const { key, startMs } = utcDay(now);
+  const [stats, incidents, people] = await Promise.all([
+    readDigestStats(startMs, now),
+    readIncidents(key),
+    readDigestPeople(startMs, now),
+  ]);
+  const time = new Date(now).toISOString().slice(11, 16);
+  await notify(
+    formatReport(
+      `YTS update — today so far, ${time} UTC`,
+      stats,
+      config.dailySpendCapUsd,
+      incidents,
+      people
+    )
+  );
 }

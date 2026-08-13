@@ -3,6 +3,7 @@ import { randomBytes, createHash } from 'node:crypto';
 import { config } from './config.js';
 import { pool } from './db.js';
 import { reportCritical, CRITICAL } from './digest.js';
+import { notify } from './notify.js';
 
 // Google sign-in, authorisation-code flow.
 //
@@ -133,11 +134,27 @@ export async function signInWithGoogle({ code, codeVerifier, redirectUri }) {
     `INSERT INTO users (user_id, email, created_at, last_seen_at)
      VALUES ($1, $2, $3, $3)
      ON CONFLICT (user_id) DO UPDATE SET email = EXCLUDED.email, last_seen_at = $3
-     RETURNING user_id, email, plan`,
+     RETURNING user_id, email, plan, created_at`,
     [claims.sub, claims.email || null, now]
   );
 
   const user = rows[0];
+
+  // created_at is only ever set on the INSERT branch above - a returning user
+  // hits the UPDATE branch and keeps their original value - so this is true
+  // exactly once per account, on the sign-up that created it. Same test the
+  // daily digest already uses to count "new sign-ups" for a window, here
+  // applied to a window of one moment so it can fire immediately instead of
+  // waiting for the next report.
+  //
+  // TEMPORARY: worth an instant ping while sign-ups are rare enough to be
+  // genuinely exciting. Remove once there are enough that this becomes noise
+  // rather than news - the daily and on-demand reports already count new
+  // sign-ups, so nothing is lost by dropping this later.
+  if (user.created_at === now) {
+    notify(`New sign-up: ${user.email || '(no email on file)'}`);
+  }
+
   return { sessionToken: await createSession(user.user_id), user };
 }
 

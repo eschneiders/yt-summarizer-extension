@@ -1,4 +1,5 @@
 import { createServer } from 'node:http';
+import { timingSafeEqual } from 'node:crypto';
 
 import { config, validateConfig } from './config.js';
 import {
@@ -19,6 +20,7 @@ import { summarise, SummariseError, resolveDurationOrRefuse } from './summarise.
 import {
   maybeSendDailyDigest,
   maybeSendSpendAlert,
+  sendUpdateReport,
   reportCritical,
   CRITICAL,
 } from './digest.js';
@@ -193,6 +195,60 @@ function readBody(req) {
     });
     req.on('error', reject);
   });
+}
+
+// ---------- Telegram ----------
+//
+// The bot is otherwise one-directional - see notify.js - and this is the one
+// place it listens back. A webhook rather than polling: the server is already
+// an always-on HTTP endpoint, so a second network loop with its own retry and
+// backoff would be new failure modes bought for nothing.
+//
+// Handled before the identify() gate further down, alongside /v1/health and
+// /v1/auth/google, because Telegram is not a signed-in extension user and has
+// no session token to send. Its own two checks do that job instead: the
+// secret only Telegram is configured to send, and - because any Telegram user
+// can open a DM with a public bot - that the message came from the one chat
+// this bot is for.
+function telegramSecretMatches(header) {
+  if (!config.telegramWebhookSecret) return false;
+  const a = Buffer.from(String(header || ''));
+  const b = Buffer.from(config.telegramWebhookSecret);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+async function handleTelegramWebhook(req, res, cors) {
+  if (!config.telegramWebhookSecret) {
+    send(res, 404, { ok: false }, cors);
+    return;
+  }
+  if (!telegramSecretMatches(req.headers['x-telegram-bot-api-secret-token'])) {
+    send(res, 401, { ok: false }, cors);
+    return;
+  }
+
+  let body;
+  try {
+    body = await readBody(req);
+  } catch {
+    send(res, 200, { ok: true }, cors);
+    return;
+  }
+
+  const message = body.message || body.edited_message;
+  const chatId = message && message.chat && String(message.chat.id);
+  // Strips a group-chat "@BotName" suffix; a DM sends the command bare.
+  const text = ((message && message.text) || '').trim().split('@')[0];
+
+  // Ack now, before the slow part: building the report is a couple of DB
+  // queries and a Telegram send, easily slow enough that waiting on it here
+  // risks Telegram's own retry timeout, which would fire a second /update for
+  // one tap.
+  send(res, 200, { ok: true }, cors);
+
+  if (text === '/update' && chatId === config.telegramChatId) {
+    sendUpdateReport().catch((err) => console.error('[yts:api] /update failed:', err.message));
+  }
 }
 
 // ---------- routes ----------
@@ -384,6 +440,13 @@ const server = createServer(async (req, res) => {
 
   if (url.pathname === '/v1/health') {
     send(res, 200, { ok: true }, cors);
+    return;
+  }
+
+  // Telegram, not a signed-in user - see handleTelegramWebhook for why this
+  // sits ahead of the identify() gate below.
+  if (req.method === 'POST' && url.pathname === '/v1/telegram/webhook') {
+    await handleTelegramWebhook(req, res, cors);
     return;
   }
 
