@@ -172,9 +172,29 @@ extension. I run those and paste results back. Give me exact things to look for.
 | Database | Neon Postgres |
 | Website | GitHub Pages from `docs/` → `eschneiders.github.io/yt-summarizer-extension/` |
 | OAuth | Google Cloud project "Summariser" (also holds the Gemini key) |
-| Extension ID | `ejijlnafmeidfeoijhhofplnjhfblfdh` (pinned via manifest `key`) |
-| Redirect URI | `https://ejijlnafmeidfeoijhhofplnjhfblfdh.chromiumapp.org/` |
+| Sideload download | `…github.io/yt-summarizer-extension/feed-summariser.zip` (what friends install today) |
+| Web Store | Unlisted, **pending review** since 12 Aug 2026, item `hkdafonhnkaegdnnnabobgagdclkeeci` |
 | Support email | `summariser.ex@gmail.com` |
+
+**There are TWO extension IDs, and both must stay registered everywhere.**
+
+| ID | Where it comes from |
+|---|---|
+| `ejijlnafmeidfeoijhhofplnjhfblfdh` | the manifest `key` — every unpacked/sideloaded install |
+| `hkdafonhnkaegdnnnabobgagdclkeeci` | assigned by the Web Store — every store install |
+
+Both are in `YTS_ALLOWED_ORIGINS` and both `chromiumapp.org` redirect URIs are
+registered on the OAuth client. Verified working. Miss either and that install
+route is silently dead: CORS 403 on every request, sign-in impossible, and
+nothing in the server log because the requests never arrive.
+
+**`package-extension.sh` builds two different zips on purpose.**
+`dist/yt-summariser-<v>.zip` has the `key` **stripped** (the store rejects a
+manifest carrying one) and goes to the Web Store. `docs/feed-summariser.zip`
+**keeps** the key, because an unpacked install without it gets a random id from
+its folder path and is dead on arrival. Never upload one where the other
+belongs. The sideload filename is fixed so re-running the script republishes
+over the same URL and no shared link goes stale.
 
 Private signing key is at `~/yts-secrets/extension-signing-key.pem`, outside the
 repo. **Losing it means losing the extension ID.**
@@ -191,8 +211,9 @@ screen's privacy-policy link.
 
 Railway environment: `DATABASE_URL`, `YTS_DATABASE_SSL=true`, `GEMINI_API_KEY`,
 `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `YOUTUBE_API_KEY`,
-`YTS_DAILY_SPEND_CAP_USD=2`, `YTS_WEEKLY_QUOTA_MINUTES=400`,
-`YTS_FREE_MAX_VIDEO_MINUTES=60` (the paywall knob),
+`YTS_DAILY_SPEND_CAP_USD=2`, `YTS_WEEKLY_QUOTA_MINUTES=600`,
+`YTS_FREE_MAX_VIDEO_MINUTES=90` (the paywall knob — deliberately generous
+during testing; the eventual free tier is meant to land at 20–40),
 `YTS_ALLOWED_ORIGINS=chrome-extension://ejijl…`,
 `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `PORT=8787`.
 
@@ -401,17 +422,29 @@ In `server/src/summarise.js`, in this order and for this reason:
    `YOUTUBE_API_KEY`. Email was asked about and is possible - `notify.js` is
    the one place any second channel would plug in - but nothing is built for
    it, since only Telegram was requested.
-2. **Chrome Web Store**: $5 fee, unlisted, data disclosures matching the privacy
-   policy. Not started. After publishing, check the assigned extension ID — if
-   it differs from the pinned one, add the new `chromiumapp.org` redirect URI.
+2. **Chrome Web Store**: submitted 12 Aug 2026, unlisted, **pending review**.
+   Expect days rather than hours — a host permission forces a manual in-depth
+   review. v0.5.3 is what is in the queue; v0.5.4 (the "what gets stored"
+   disclosure) is built and waiting to go up as the first update, so batch
+   anything else into it. Do not upload over a submission that is in review;
+   it restarts the queue. **When approved:** install from the store and re-run
+   the golden path, then swap the website CTA from the sideload download to
+   the store link (one marked spot in `docs/index.html`).
 3. ~~Server-side duration lookup.~~ **Done** — `server/src/youtube.js`. The one
    thing left is operational: create the API key. In the same Google Cloud
    project as the Gemini key, enable **YouTube Data API v3**, make a key
    restricted to that one API, and set `YOUTUBE_API_KEY` on Railway. **Until
    that variable is set the server still believes the client**, and says so in
    its first log lines. **Set it before strangers get the link.**
-4. `YTS_ALLOWED_ORIGINS` must not be `*` in production.
-5. Store link placeholder in `docs/index.html` (the only remaining TODO there).
+4. ~~`YTS_ALLOWED_ORIGINS` must not be `*`~~ **Done** — set to both extension
+   origins, verified: a random origin still gets 403.
+5. ~~Store link placeholder in `docs/index.html`~~ **Done** — the site now
+   hosts the sideload zip and its install steps, so sharing it is one URL.
+   Swap the CTA to the store link once approved.
+6. **Payments and the paid tier — last, after friends have used it.** The shape
+   is decided (see "Pricing"), nothing is built. Two things still open: the VAT
+   route (Stripe + Stripe Tax vs a merchant of record), and the free length
+   threshold, which should come from the distribution query rather than taste.
 
 ## Known / suspected issues
 
