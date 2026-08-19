@@ -382,6 +382,28 @@ export async function writeSummary(videoId, revision, markdown, model) {
   );
 }
 
+// ---------- main points ----------
+
+export async function readMainPoint(videoId, revision) {
+  const { rows } = await pool.query(
+    'SELECT markdown, model, created_at FROM main_points WHERE video_id = $1 AND revision = $2',
+    [videoId, revision]
+  );
+  return rows[0] || null;
+}
+
+// Same DO NOTHING reasoning as writeSummary: two people asking at once both
+// paid, either answer is valid, and everyone reading the same one afterwards
+// matters more than which one it is.
+export async function writeMainPoint(videoId, revision, markdown, model) {
+  await pool.query(
+    `INSERT INTO main_points (video_id, revision, markdown, model, created_at)
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (video_id, revision) DO NOTHING`,
+    [videoId, revision, markdown, model, Date.now()]
+  );
+}
+
 // ---------- settings ----------
 //
 // The same key/value table the user-hash salt lives in. Used here to remember

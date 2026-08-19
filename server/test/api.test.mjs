@@ -20,6 +20,7 @@ import {
   setSetting,
   readDigestStats,
   readDigestPeople,
+  readMainPoint,
   claimSetting,
   recordIncident,
   readIncidents,
@@ -29,6 +30,7 @@ import {
   weekKey,
 } from '../src/db.js';
 import { parseIso8601Duration } from '../src/youtube.js';
+import { planSummary } from '../src/summarise.js';
 import {
   formatDigest,
   measuredUsd,
@@ -922,6 +924,108 @@ section('the extension can report that YouTube changed');
   ok('and it is not an open endpoint', anon.status === 401);
 
   await pool.query('DELETE FROM incidents WHERE kind = $1', ['youtube-layout-changed']);
+}
+
+// -------------------------------------------------------------- main points
+
+section('the main point, derived from the stored summary');
+{
+  const user = await newUser();
+  const videoId = 'mainpt00001';
+  await pool.query('DELETE FROM main_points WHERE video_id = $1', [videoId]);
+  await pool.query('DELETE FROM summaries WHERE video_id = $1', [videoId]);
+  await pool.query('DELETE FROM videos WHERE video_id = $1', [videoId]);
+  await pool.query(
+    'INSERT INTO videos (video_id, revision, duration_seconds, first_seen_at) VALUES ($1, 1, 600, $2)',
+    [videoId, Date.now()]
+  );
+
+  // Nothing to read from yet. Not an error on the caller's part - the video
+  // simply has not been summarised - so it must be distinguishable from a
+  // genuine failure, which is what the panel keys off to say "summarise first".
+  let r = await post(user, `/v1/videos/${videoId}/point`, {});
+  ok('without a summary it refuses, and says which problem it is', r.status === 409 && r.code === 'NO_SUMMARY');
+
+  await writeSummary(videoId, 1, '## Overview\nRemote work raises output.', 'test-model');
+
+  // With a summary but no cached answer this reaches the generation path,
+  // which in this environment stops at the missing key. That it gets that far
+  // is the assertion: the cache miss resolved and the guards ran in order.
+  r = await post(user, `/v1/videos/${videoId}/point`, {});
+  ok(
+    'with a summary but nothing cached, it reaches the generation path',
+    r.status === 503 && r.code === 'NO_API_KEY',
+    JSON.stringify(r).slice(0, 120)
+  );
+
+  // A cached answer must be served without touching Gemini at all - this is
+  // the whole economic argument for the feature.
+  await pool.query(
+    `INSERT INTO main_points (video_id, revision, markdown, model, created_at)
+     VALUES ($1, 1, $2, 'test-model', $3)`,
+    [videoId, 'Remote work raises output.', Date.now()]
+  );
+  r = await post(user, `/v1/videos/${videoId}/point`, {});
+  ok(
+    'a cached answer is served without a key, and marked as not freshly generated',
+    r.ok === true && r.markdown === 'Remote work raises output.' && r.generated === false,
+    JSON.stringify(r).slice(0, 120)
+  );
+
+  // The one that is easy to get wrong: a downvote bumps the revision and the
+  // summary is rewritten, so a main point keyed to the video alone would carry
+  // on describing text nobody can read any more.
+  await pool.query('UPDATE videos SET revision = 2 WHERE video_id = $1', [videoId]);
+  r = await post(user, `/v1/videos/${videoId}/point`, {});
+  ok(
+    'a revision bump invalidates the cached answer rather than serving a stale one',
+    r.status === 409 && r.code === 'NO_SUMMARY',
+    JSON.stringify(r).slice(0, 120)
+  );
+
+  const anon = await fetch(`${BASE}/v1/videos/${videoId}/point`, { method: 'POST' });
+  ok('and it is not an open endpoint', anon.status === 401);
+
+  // Once per video, enforced by the summary carrying the existing answer: the
+  // panel renders what is already there instead of offering the button again.
+  // Without this the button would come back on every open, which is what
+  // "only once per video" is asking not to happen.
+  {
+    const vid2 = 'mainpt00002';
+    await pool.query('DELETE FROM main_points WHERE video_id = $1', [vid2]);
+    await pool.query('DELETE FROM summaries WHERE video_id = $1', [vid2]);
+    await pool.query('DELETE FROM videos WHERE video_id = $1', [vid2]);
+    await pool.query(
+      'INSERT INTO videos (video_id, revision, duration_seconds, first_seen_at) VALUES ($1, 1, 60, $2)',
+      [vid2, Date.now()]
+    );
+    await writeSummary(vid2, 1, '## Overview\nA point is argued.', 'test-model');
+    await pool.query(
+      `INSERT INTO main_points (video_id, revision, markdown, model, created_at)
+       VALUES ($1, 1, $2, 'test-model', $3)`,
+      [vid2, 'The argued point.', Date.now()]
+    );
+
+    const fresh = await newUser();
+    const sum = await planSummary(vid2, { userId: fresh.userId, plan: 'free' }, 60);
+    ok('an existing summary still resolves for a new reader', !!sum.existing);
+
+    const carried = await readMainPoint(vid2, sum.stats.revision);
+    ok(
+      'and the stored main point is readable at that revision, so it rides along with the summary',
+      carried && carried.markdown === 'The argued point.'
+    );
+
+    await pool.query('DELETE FROM main_points WHERE video_id = $1', [vid2]);
+    await pool.query('DELETE FROM summaries WHERE video_id = $1', [vid2]);
+    await pool.query('DELETE FROM videos WHERE video_id = $1', [vid2]);
+    await pool.query('DELETE FROM sessions WHERE user_id = $1', [fresh.userId]);
+    await pool.query('DELETE FROM users WHERE user_id = $1', [fresh.userId]);
+  }
+
+  await pool.query('DELETE FROM main_points WHERE video_id = $1', [videoId]);
+  await pool.query('DELETE FROM summaries WHERE video_id = $1', [videoId]);
+  await pool.query('DELETE FROM videos WHERE video_id = $1', [videoId]);
 }
 
 // ------------------------------------------------------------- telegram bot

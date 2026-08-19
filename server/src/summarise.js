@@ -1,5 +1,10 @@
 import { config, maxVideoSecondsFor } from './config.js';
-import { summarizeYouTubeVideoStreaming, summarizeYouTubeVideo, MODEL } from './gemini.js';
+import {
+  summarizeYouTubeVideoStreaming,
+  summarizeYouTubeVideo,
+  extractMainPoint,
+  MODEL,
+} from './gemini.js';
 import { resolveDuration, DurationUnavailable } from './youtube.js';
 import { reportCritical, CRITICAL } from './digest.js';
 import {
@@ -9,6 +14,8 @@ import {
   hasViewed,
   readSummary,
   writeSummary,
+  readMainPoint,
+  writeMainPoint,
   logGeminiCall,
   spendSince,
 } from './db.js';
@@ -170,10 +177,16 @@ export async function summarise({ videoId, auth, durationSeconds: claimedSeconds
   if (intent.existing) {
     if (intent.needsBilling) await commitView(videoId, userId, durationSeconds);
     const stats = await readStats(videoId, userId);
+    // If someone has already asked what this video argues, send it along with
+    // the summary. That is what makes the main point a once-per-video thing
+    // rather than a button that reappears on every open: the panel renders the
+    // answer it already has instead of offering to fetch it again.
+    const point = await readMainPoint(videoId, stats.revision);
     return {
       markdown: intent.existing.markdown,
       model: intent.existing.model,
       generated: false,
+      mainPoint: point ? point.markdown : null,
       stats,
       quota: await readQuota(userId, auth),
     };
@@ -224,11 +237,27 @@ export async function summarise({ videoId, auth, durationSeconds: claimedSeconds
       } catch (blockingErr) {
         // Both paths failed, so this is not a flaky stream - no summary can be
         // generated at all right now.
+        console.error(
+          '[yts:api] Gemini failed both ways for %s: streaming "%s", blocking "%s"',
+          videoId,
+          streamErr.message,
+          blockingErr.message
+        );
         reportCritical(
           CRITICAL.GEMINI,
           `${videoId}: streaming "${streamErr.message}", blocking "${blockingErr.message}"`
         );
-        throw blockingErr;
+        // A SummariseError, not the raw blockingErr: this failure is already
+        // reported above, on purpose, with the detail that matters. Throwing
+        // the raw error instead would land it in index.js's catch-all for
+        // *unexpected* failures, which reports it a second time under
+        // "unhandled-error" - one real event on the money path duplicated
+        // into two rows in every incident report, the second one implying a
+        // code bug that was not actually there.
+        throw new SummariseError(
+          'GENERATION_FAILED',
+          'Could not summarise that video right now. Please try again shortly.'
+        );
       }
     }
 
@@ -249,9 +278,96 @@ export async function summarise({ videoId, auth, durationSeconds: claimedSeconds
       model: result.model || MODEL,
       generated: true,
       cost: result.cost,
+      // Nothing can have asked for a main point on a summary that did not
+      // exist until this moment. Stated rather than omitted so the client
+      // never has to tell "not asked yet" from "field missing".
+      mainPoint: null,
       stats,
       quota,
     };
+  } finally {
+    releaseSlot(userId);
+  }
+}
+
+/**
+ * The video's central claim, generated once per (video, revision) and served
+ * from the store to everyone after.
+ *
+ * Same economics as a summary and the same consequences: generated once,
+ * cached, and there is no way to ask for a second opinion - a downvote on the
+ * summary bumps the revision, which regenerates both.
+ *
+ * Differs from summarise() in one way that matters: this is the first paid
+ * path not metered in seconds of video, because there is no video in it. So it
+ * does not touch the weekly allowance at all. The reader has already paid
+ * minutes for the summary this is derived from, and charging video minutes for
+ * a text call would be inventing a number. What still holds is the spend cap,
+ * checked here exactly as it is on the summarise path - that guard is about
+ * dollars, not minutes, and it is the one that has to work when something has
+ * gone wrong.
+ */
+export async function mainPoint({ videoId, auth }) {
+  const { userId } = auth;
+  const stats = await readStats(videoId, userId);
+
+  // Cached first, before any guard: serving something already written costs
+  // nothing and can never be the thing that trips a limit.
+  const cached = await readMainPoint(videoId, stats.revision);
+  if (cached) {
+    return { markdown: cached.markdown, model: cached.model, generated: false };
+  }
+
+  // No summary means nothing to read. This is not an error worth alarming
+  // about - it is what happens if someone calls this before summarising.
+  const summary = await readSummary(videoId, stats.revision);
+  if (!summary) {
+    throw new SummariseError(
+      'NO_SUMMARY',
+      'Summarise the video first, then I can tell you what it is arguing.'
+    );
+  }
+
+  await assertUnderSpendCap();
+
+  if (!config.geminiApiKey) {
+    throw new SummariseError('NO_API_KEY', 'The service is not configured with a Gemini key.');
+  }
+
+  if (!acquireSlot(userId)) {
+    throw new SummariseError(
+      'TOO_MANY_REQUESTS',
+      'Still finishing your other summaries — this one is queued.'
+    );
+  }
+
+  try {
+    let result;
+    try {
+      result = await extractMainPoint({
+        apiKey: config.geminiApiKey,
+        summaryMarkdown: summary.markdown,
+      });
+    } catch (err) {
+      console.error('[yts:api] main point failed for %s: %s', videoId, err.message);
+      // Deliberately not a CRITICAL incident. Gemini failing on the summarise
+      // path means the service cannot do the one thing it exists for; failing
+      // here means one optional extra did not appear, and paging someone at
+      // 3am over it would train them to ignore the alerts that matter.
+      throw new SummariseError(
+        'MAIN_POINT_FAILED',
+        'Could not work out the main point just now. Please try again shortly.'
+      );
+    }
+
+    // Logged with duration_seconds 0: there is no video in this call, and the
+    // daily report prices a day from video seconds. Recording minutes here
+    // would inflate "minutes of video" with time nobody watched. The cost is
+    // what matters and the cost is recorded, so the spend cap sees it.
+    await logGeminiCall({ videoId, userId, durationSeconds: 0, cost: result.cost });
+    await writeMainPoint(videoId, stats.revision, result.markdown, result.model);
+
+    return { markdown: result.markdown, model: result.model || MODEL, generated: true };
   } finally {
     releaseSlot(userId);
   }

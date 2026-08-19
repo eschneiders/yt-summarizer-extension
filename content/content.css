@@ -386,6 +386,49 @@ html:not([dark]) .yts-chip {
   }
 }
 
+/* Sits between the summary and the footer, and is empty until asked for - the
+   button itself lives down in the footer row with Watch/Later/Skip. An empty
+   slot must take up no space at all, or every panel gains a gap above the
+   footer for a block that is not there. */
+.yts-mainpoint {
+  margin: 18px 0 4px;
+}
+
+.yts-mainpoint:empty {
+  margin: 0;
+}
+
+.yts-mainpoint-label {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.6;
+  margin-bottom: 6px;
+}
+
+.yts-mainpoint-text {
+  font-size: 15px;
+  line-height: 1.6;
+  padding-left: 12px;
+  border-left: 3px solid rgba(255, 255, 255, 0.28);
+}
+
+html:not([dark]) .yts-mainpoint-text {
+  border-left-color: rgba(0, 0, 0, 0.22);
+}
+
+.yts-mainpoint-btn[disabled] {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.yts-mainpoint-error {
+  margin-top: 8px;
+  font-size: 13px;
+  opacity: 0.75;
+}
+
 .yts-panel-footer {
   display: flex;
   align-items: center;

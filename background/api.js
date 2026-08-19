@@ -153,6 +153,10 @@ export const api = {
   view: (videoId, durationSeconds) =>
     call(`/v1/videos/${videoId}/view`, 'POST', { durationSeconds }),
   vote: (videoId, vote) => call(`/v1/videos/${videoId}/vote`, 'POST', { vote }),
+  // The video's central claim, derived server-side from the stored summary.
+  // Cached per (video, revision) there, so a second click on a video anyone
+  // has already asked about costs nothing and returns immediately.
+  mainPoint: (videoId) => call(`/v1/videos/${videoId}/point`, 'POST'),
   quota: () => call('/v1/me/quota', 'GET'),
   myVideos: () => call('/v1/me/videos', 'GET'),
   deleteMe: () => call('/v1/me', 'DELETE'),

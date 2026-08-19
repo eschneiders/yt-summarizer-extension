@@ -614,14 +614,89 @@ window.__ytSummarizer = window.__ytSummarizer || {};
     return copy;
   }
 
-  function renderFooter(meta, summary, videoId) {
+  // "What is this actually arguing?" - asked of the stored summary rather than
+  // the video, so it is cheap and, once anyone has asked, instant for everyone
+  // after.
+  //
+  // The answer lands directly above the footer rather than at the top of the
+  // panel: the click happens down here, and content appearing off-screen above
+  // a long summary reads as nothing having happened. It also sits correctly as
+  // a conclusion - you have just read the summary, this is the bottom line.
+  // Split in two on purpose. The button belongs in the footer row beside
+  // Watch/Later/Skip - it is an action, and actions live together. The answer
+  // needs a block of its own above that row, because two or three sentences do
+  // not belong in a row of pill buttons.
+  //
+  // So: this makes the empty block, renderMainPointButton fills it, and the
+  // footer holds the button that does the filling.
+  function renderMainPointSlot(existing) {
+    const slot = h('div', 'yts-mainpoint');
+    if (existing) fillMainPoint(slot, existing);
+    return slot;
+  }
+
+  function fillMainPoint(slot, markdown) {
+    slot.replaceChildren(
+      h('div', 'yts-mainpoint-label', 'Main point'),
+      h('div', 'yts-mainpoint-text', markdown)
+    );
+  }
+
+  function renderMainPointButton(videoId, slot) {
+    const btn = h('button', 'yts-action yts-mainpoint-btn', 'Main point');
+    btn.type = 'button';
+    btn.title = 'What is this video actually arguing?';
+
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      btn.textContent = 'Thinking…';
+
+      const res = await ns.fetchMainPoint(videoId);
+
+      // The panel can be closed or re-rendered while this is in flight, in
+      // which case the slot is detached and there is nothing to update.
+      if (!slot.isConnected) return;
+
+      if (!res || !res.ok) {
+        const code = res && res.code;
+        // A failure must not burn the one attempt - the button comes back.
+        btn.disabled = false;
+        btn.textContent = 'Main point';
+        slot.replaceChildren(
+          h(
+            'div',
+            'yts-mainpoint-error',
+            code === 'NO_SUMMARY'
+              ? 'Summarise the video first.'
+              : (res && res.error) || 'Could not work that out just now.'
+          )
+        );
+        return;
+      }
+
+      // The answer replaces the button entirely: there is exactly one per
+      // video, the same way there is no Re-summarise.
+      fillMainPoint(slot, res.markdown);
+      btn.remove();
+    });
+
+    return btn;
+  }
+
+  function renderFooter(meta, summary, videoId, mainPointSlot) {
     const footer = h('div', 'yts-panel-footer');
     const actions = h('div', 'yts-footer-actions');
+
+    // Only when nobody has asked yet - an answer already on screen has no
+    // button to go with it.
+    const pointBtn =
+      mainPointSlot && !meta.mainPoint ? renderMainPointButton(videoId, mainPointSlot) : null;
 
     // On the watch page all three of these are nonsense: you are already
     // watching it, "Later" would queue a second tab of the page you are on,
     // and there is no feed card to hide. Feedback and Copy still apply.
     if (anchorSurface && anchorSurface.kind === 'single') {
+      if (pointBtn) actions.appendChild(pointBtn);
       const right = h('div', 'yts-footer-right');
       right.append(renderFeedback(meta, videoId), renderCopyButton(meta, summary, videoId));
       footer.append(actions, right);
@@ -652,6 +727,9 @@ window.__ytSummarizer = window.__ytSummarizer || {};
       ns.skipVideo(videoId, card);
     });
 
+    // First in the row: it is about deciding whether this video is worth
+    // anything, which comes before Watch/Later/Skip act on that decision.
+    if (pointBtn) actions.appendChild(pointBtn);
     actions.append(watch, later, skip);
 
     const right = h('div', 'yts-footer-right');
@@ -698,10 +776,12 @@ window.__ytSummarizer = window.__ytSummarizer || {};
     renderSummary(markdown, meta, videoId) {
       if (!el) return;
       clearInterval(tickHandle);
+      const mainPointSlot = renderMainPointSlot(meta.mainPoint);
       setContent([
         renderHeader(meta, markdown, videoId),
         renderMarkdown(markdown, videoId),
-        renderFooter(meta, markdown, videoId),
+        mainPointSlot,
+        renderFooter(meta, markdown, videoId, mainPointSlot),
       ]);
     },
 

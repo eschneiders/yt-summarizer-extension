@@ -16,7 +16,7 @@ import {
   pruneApiUsage,
   migrate,
 } from './db.js';
-import { summarise, SummariseError, resolveDurationOrRefuse } from './summarise.js';
+import { summarise, mainPoint, SummariseError, resolveDurationOrRefuse } from './summarise.js';
 import {
   maybeSendDailyDigest,
   maybeSendSpendAlert,
@@ -153,6 +153,10 @@ async function handleSummariseStream(req, res, cors, auth, videoId, durationSeco
       markdown: result.markdown,
       model: result.model,
       generated: result.generated,
+      // Null unless someone has already asked what this video argues. Carried
+      // here so re-opening a summary shows the answer it already has instead
+      // of offering the button a second time.
+      mainPoint: result.mainPoint || null,
       stats: result.stats,
       quota: result.quota,
     });
@@ -329,6 +333,26 @@ async function route(req, url, auth) {
         readQuota(userId, auth),
       ]);
       return { status: 200, body: { ok: true, stats, quota } };
+    }
+
+    // POST /v1/videos/:id/point
+    // The video's central claim, derived from the stored summary. Not
+    // streamed: it is two or three sentences, so there is nothing to watch
+    // arrive, and a plain JSON reply is one less failure mode than SSE.
+    if (req.method === 'POST' && parts[3] === 'point' && parts.length === 4) {
+      try {
+        const result = await mainPoint({ videoId, auth });
+        return { status: 200, body: { ok: true, ...result } };
+      } catch (err) {
+        if (err instanceof SummariseError) {
+          // 409 for "there is no summary yet" - the request is fine, the
+          // resource it depends on just does not exist. Everything else here
+          // is a refusal or a failure on our side, not a bad request.
+          const status = err.code === 'NO_SUMMARY' ? 409 : 503;
+          return { status, body: { ok: false, code: err.code, error: err.message } };
+        }
+        throw err;
+      }
     }
 
     if (req.method === 'POST' && parts[3] === 'view' && parts.length === 4) {

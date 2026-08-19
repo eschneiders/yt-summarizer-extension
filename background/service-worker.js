@@ -152,6 +152,25 @@ const HANDLERS = {
     };
   },
 
+  // Unlike most of these, a failure here has to reach the user: they pressed a
+  // button and are watching a spinner, so "quietly return nothing" would leave
+  // it spinning forever. The code is passed through so the panel can tell
+  // "summarise it first" apart from a real failure.
+  async YTS_MAIN_POINT(message) {
+    const res = await api.mainPoint(message.videoId);
+    if (!res) {
+      return { ok: false, code: 'OFFLINE', error: 'The summariser service is unreachable.' };
+    }
+    if (!res.ok) {
+      return {
+        ok: false,
+        code: res.code || 'FAILED',
+        error: res.error || 'Could not work out the main point.',
+      };
+    }
+    return { ok: true, markdown: res.markdown, generated: !!res.generated };
+  },
+
   // Content scripts cannot call chrome.tabs, so tab opening is proxied here.
   // active:false is what makes "Later" queue a video without stealing focus.
   async YTS_OPEN_TAB(message) {

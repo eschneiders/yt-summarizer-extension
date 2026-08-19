@@ -119,6 +119,84 @@ function buildRequestBody(videoUrl) {
   };
 }
 
+// The main-point prompt. Deliberately short: the nine rounds that produced the
+// summary prompt found that restating a rule made it LESS likely to be
+// followed, so each thing here is said exactly once.
+//
+// The last paragraph is the one that earns its place. Plenty of videos - news
+// roundups, tip lists, walkthroughs - are not arguing anything, and without an
+// explicit way out the model will manufacture a through-line and state it with
+// the same confidence as a real one. An honest "this isn't that kind of video"
+// is the more useful answer, and it is the difference between this being a
+// thinking aid and a machine for making lists sound like arguments.
+const MAIN_POINT_INSTRUCTION = `You are given a summary of a video. State the single main point the video is
+arguing for - the claim it wants the viewer to leave with, not a description of
+what it covers.
+
+Two or three sentences. No heading, no bullets, no preamble. State the claim
+itself rather than writing "the video argues that".
+
+If the video is not arguing one point - a news roundup, a list of tips, a
+walkthrough, a review of several things - say that instead, in one sentence.
+Do not invent a through-line that is not there.`;
+
+// Text in, text out. The `input` shape here mirrors the video block in
+// buildRequestBody - same endpoint, same system_instruction slot, a text part
+// instead of a video one. The API reference documents the part types by name
+// without a request example, which is the same situation that made
+// resolution:"low" worth verifying by its token count; here the check is
+// cheaper, because a wrong shape produces an HTTP error rather than a silently
+// ignored field.
+function buildMainPointBody(summaryMarkdown) {
+  return {
+    model: MODEL,
+    system_instruction: MAIN_POINT_INSTRUCTION,
+    input: [{ type: 'text', text: summaryMarkdown }],
+  };
+}
+
+/**
+ * Reads a stored summary and returns the video's central claim.
+ *
+ * No streaming: this is two or three sentences, so the machinery would buy a
+ * perceived-latency win worth less than the extra failure mode. Costs a
+ * fraction of the summary it derives from - a few hundred tokens of text
+ * against minutes of ingested video - and the gap widens the longer the video.
+ */
+export async function extractMainPoint({ apiKey, summaryMarkdown }) {
+  const started = Date.now();
+  const res = await fetch(ENDPOINT, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+    body: JSON.stringify(buildMainPointBody(summaryMarkdown)),
+  });
+
+  if (!res.ok) throw await readError(res);
+
+  const payload = JSON.parse(await res.text());
+  if (payload.status && payload.status !== 'completed') {
+    console.warn('[yts:api] main-point interaction status was "%s"', payload.status);
+  }
+
+  let text = payload.output_text || '';
+  if (!text) {
+    for (const step of payload.steps || []) {
+      if (step.type !== 'model_output') continue;
+      text += (step.content || [])
+        .filter((c) => c.type === 'text' && c.text)
+        .map((c) => c.text)
+        .join('');
+    }
+  }
+  if (!text.trim()) throw new Error('Gemini returned no main point');
+
+  const cost = estimateCost(payload.usage);
+  // No durationSeconds: there is no video in this call, so the tokens-per-second
+  // baseline check logUsage does would be meaningless here.
+  logUsage(cost, ((Date.now() - started) / 1000).toFixed(1), 0);
+  return { markdown: text.trim(), usage: payload.usage || null, cost, model: MODEL };
+}
+
 function estimateCost(usage) {
   if (!usage) return null;
   const inputTokens = usage.total_input_tokens || 0;

@@ -120,6 +120,27 @@ CREATE TABLE IF NOT EXISTS summaries (
   PRIMARY KEY (video_id, revision)
 );
 
+-- The single claim a video is arguing for, when it is arguing for one.
+--
+-- Derived from the stored summary rather than from the video: a text call
+-- costs a fraction of a video one, and if the video makes an argument at all
+-- it is already somewhere in the summary's text. The limitation that follows
+-- is real and worth knowing - a summary that lost the argument cannot have it
+-- recovered from here, and the model will reach for something plausible
+-- instead. If these come back vague, the summary is the thing to fix.
+--
+-- Keyed by (video_id, revision) for the same reason summaries are: a downvote
+-- bumps the revision and regenerates, and a main point keyed to the video
+-- alone would survive that and go on describing text nobody can read any more.
+CREATE TABLE IF NOT EXISTS main_points (
+  video_id   TEXT    NOT NULL,
+  revision   INTEGER NOT NULL,
+  markdown   TEXT    NOT NULL,
+  model      TEXT    NOT NULL,
+  created_at BIGINT  NOT NULL,
+  PRIMARY KEY (video_id, revision)
+);
+
 -- Every paid call, with what it cost. This is both the spend cap's input and
 -- the answer to "why was yesterday expensive".
 CREATE TABLE IF NOT EXISTS gemini_calls (

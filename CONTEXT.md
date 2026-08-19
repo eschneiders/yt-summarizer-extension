@@ -66,7 +66,7 @@ server/               Node, one dependency (`pg`)
   src/schema.sql      applied idempotently at boot
   src/notify.js       one Telegram sendMessage call, everything else calls this
   src/digest.js       daily report, spend alerts, critical-failure alerts
-  test/api.test.mjs   135 assertions against a live server
+  test/api.test.mjs   150 assertions against a live server
 ```
 
 Content scripts load in manifest order and share one `window.__ytSummarizer`
@@ -145,7 +145,7 @@ the click handler resolves the surface from that stamp, not from the pathname.
 **Server** (needs Postgres):
 ```bash
 createdb yts_test && cd server && npm install && npm start
-cd server && npm test      # 135 assertions, in another terminal
+cd server && npm test      # 150 assertions, in another terminal
 ```
 
 **Extension**: `chrome://extensions` → Developer mode → Load unpacked. The ID
@@ -565,6 +565,59 @@ video sits between them, so all of this will build, test and convert nobody unti
 decision 3 is made. And **step 6 touches the extension**, so it batches into a
 store version rather than going up alone; every server step is independent of the
 store queue.
+
+## The main point: one claim per video, from the summary
+
+A button in the panel footer answers "what is this video actually arguing?".
+Added August 2026 because the summary sometimes describes what a video covers
+without landing what it is claiming - and those are different jobs.
+Summarising is compression; finding the thesis is synthesis, which discards
+most of the video and commits to one claim. One prompt doing both is why it
+was inconsistent.
+
+**Derived from the stored summary, not the video.** That is the whole reason
+it is affordable: a few hundred tokens of text against minutes of ingested
+video, roughly 4x cheaper than the summary it comes from for a 20-minute
+video, and the gap widens the longer the video. It also works on every summary
+already in the store, which re-watching would not.
+
+The limitation is real and follows directly: **a summary that lost the
+argument cannot have it recovered here.** The model will reach for something
+plausible instead. So the quality of these is a readout on the summaries - if
+they come back vague, the prompt is what needs fixing, not this.
+
+Stored in `main_points`, keyed `(video_id, revision)` exactly like `summaries`
+and for the same reason: a downvote bumps the revision and regenerates, and a
+main point keyed to the video alone would go on describing text nobody can
+read any more.
+
+**Once per video, enforced in three places.** The server generates once and
+caches. The button removes itself once answered. And an existing answer rides
+along with the summary (`mainPoint` on the `done` event) so re-opening a panel
+shows the answer rather than offering the button again. That third one is easy
+to lose: `handleSummariseStream` enumerates the fields it forwards, so a new
+field on the summarise result is silently dropped at the SSE boundary unless it
+is added there too. It was, once, and the database had the answer while the
+client never saw it. A failure is the one case that does not burn the attempt -
+the button comes back.
+
+**Not metered in video seconds, because there is no video in it.** This is the
+first paid path like that. It does not touch the weekly allowance at all - the
+reader already paid minutes for the summary it derives from, and charging video
+minutes for a text call would be inventing a number. `assertUnderSpendCap()`
+still applies, and the call is logged with `duration_seconds = 0` so the cost
+reaches the cap without inflating "minutes of video" in the daily report.
+
+**A Gemini failure here is deliberately not a CRITICAL incident.** Failing on
+the summarise path means the service cannot do the one thing it exists for;
+failing here means one optional extra did not appear. Paging someone over it
+would train them to ignore the alerts that matter.
+
+The prompt has an explicit way out for videos that are not arguing anything -
+roundups, tip lists, reviews. Without it the model manufactures a through-line
+and states it as confidently as a real one, which would make this a machine for
+making lists sound like arguments. Kept short, per the nine-round finding that
+restating a rule made it *less* likely to be followed.
 
 ## Guards on the money path, outermost first
 

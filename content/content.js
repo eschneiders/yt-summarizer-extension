@@ -210,6 +210,15 @@
     }
   };
 
+  ns.fetchMainPoint = async function (videoId) {
+    try {
+      return await sendMessage({ type: 'YTS_MAIN_POINT', videoId });
+    } catch (err) {
+      console.warn('[yts] main point failed', err.message);
+      return { ok: false, error: 'Could not reach the summariser service.' };
+    }
+  };
+
   ns.handleSummarizeClick = async function (videoId, btn, options) {
     const surface =
       ns.getSurfaceByName(btn.getAttribute('data-yts-surface')) || ns.getCurrentSurface();
@@ -361,6 +370,11 @@
       // rather than only once its own summary has finished arriving.
       if (res.quota) ns.lastQuota = res.quota;
       meta.yourVote = res.stats ? res.stats.yourVote : null;
+      // Null on a summary generated just now - nothing has had the chance to
+      // ask yet - and populated when re-opening one somebody already asked
+      // about. The panel uses it to decide between showing the answer and
+      // offering the button.
+      meta.mainPoint = res.mainPoint || null;
       ns.panel.renderSummary(res.markdown, meta, videoId);
       ns.resetButtonState(btn);
     } catch (err) {
