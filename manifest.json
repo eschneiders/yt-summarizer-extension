@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Feed Summariser",
-  "version": "0.5.4",
+  "version": "0.5.5",
   "description": "Adds a Summarise button to YouTube video cards, so you know what a video covers before committing twenty minutes to it.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAua/bsDfcuDiajMcknu5cACsTVxgzLieD4PcH6/I6ESh3XUEsY07DLZL3B17CEXT807Y8wjStLMWW0iFpOIDSFQuOTorp5+xDqrC+n1C2n9YiqXcMYsGItSILku9xgZq5GdBUsyckHdql9i/O9GjdlzZd4nYDofI8QEGG4Z5CCH25iYSpWINeGDT+FyJ9grDGjKhEhjtXD7LI11vLsGbmJqw/x/7fomelZ0/68Zv0NKz3IN+VeKa44Qilsdridw0ByLZQc3Z5txzBvngIz3snKB1Bd2qN0KDZtzGYsvooi1SFabN8afJaltye7JbQGbJ/5aea02czpdcePIt94SMfAQIDAQAB",
   "background": {
@@ -29,7 +29,7 @@
   ],
   "host_permissions": [
     "http://localhost:8787/*",
-    "https://*.up.railway.app/*"
+    "https://feedsummariser.duckdns.org/*"
   ],
   "options_page": "options/options.html",
   "content_scripts": [

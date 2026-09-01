@@ -67,16 +67,40 @@ async function refreshBadge() {
 // author to know what to type. A default is not a preference - it is the
 // difference between an extension that works when installed and one that does
 // not.
-const DEFAULT_SERVICE_URL = 'https://yt-summarizer-extension-production.up.railway.app';
+const DEFAULT_SERVICE_URL = 'https://feedsummariser.duckdns.org';
 
 // MV3 evicts the worker when idle, but badge text is browser state and
 // survives that. These cover the cases where it would otherwise be stale or
 // blank: a fresh install, a browser restart, and a changed service URL.
-chrome.runtime.onInstalled.addListener(async (details) => {
-  // Only ever fills a blank. Anyone pointing at localhost for development keeps
-  // pointing at localhost across an update.
+// Hosts this extension used to talk to. A stored serviceUrl pointing at one of
+// these is not a preference - it is a dead address left behind by a move, and
+// updating the extension would not fix it on its own, because the default below
+// only ever fills a blank. Without this an existing install keeps calling a host
+// that no longer exists and simply looks broken forever.
+const RETIRED_SERVICE_HOSTS = [/\.up\.railway\.app$/i];
+
+async function migrateServiceUrl() {
   const { serviceUrl } = await chrome.storage.local.get(['serviceUrl']);
-  if (!serviceUrl) await chrome.storage.local.set({ serviceUrl: DEFAULT_SERVICE_URL });
+  if (!serviceUrl) {
+    await chrome.storage.local.set({ serviceUrl: DEFAULT_SERVICE_URL });
+    return;
+  }
+  let host;
+  try {
+    host = new URL(serviceUrl).hostname;
+  } catch {
+    return; // unparseable, leave it alone rather than clobber it
+  }
+  if (RETIRED_SERVICE_HOSTS.some((re) => re.test(host))) {
+    console.log('[yts:sw] service moved: %s -> %s', serviceUrl, DEFAULT_SERVICE_URL);
+    await chrome.storage.local.set({ serviceUrl: DEFAULT_SERVICE_URL });
+  }
+}
+
+chrome.runtime.onInstalled.addListener(async (details) => {
+  // Fills a blank, and rewrites an address we have moved away from. Anyone
+  // pointing at localhost for development keeps pointing at localhost.
+  await migrateServiceUrl();
 
   // Summaries need an account, so the first run has to say so somewhere the
   // person is actually looking. Only on a genuine install - reopening this on
@@ -85,7 +109,10 @@ chrome.runtime.onInstalled.addListener(async (details) => {
 
   await refreshBadge();
 });
-chrome.runtime.onStartup.addListener(() => refreshBadge());
+chrome.runtime.onStartup.addListener(async () => {
+  await migrateServiceUrl();
+  await refreshBadge();
+});
 
 // No popup, so a click has to do something useful.
 chrome.action.onClicked.addListener(() => chrome.runtime.openOptionsPage());
